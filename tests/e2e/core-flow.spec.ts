@@ -54,6 +54,10 @@ test("wardrobe search, availability, and visible preference editing work", async
   await page.getByRole("textbox", { name: "New saved preference" }).fill("neon colors");
   await page.getByRole("button", { name: "Add memory" }).click();
   await expect(page.getByText("neon colors", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Done editing" }).click();
+  await page.goto("/today");
+  await page.goto("/preferences");
+  await expect(page.getByText("neon colors", { exact: true })).toBeVisible();
 });
 
 test("mock image processing saves Blob-backed clothing", async ({ page, browserName }) => {

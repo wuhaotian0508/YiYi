@@ -5,10 +5,16 @@ import { apiError, noStoreJson } from "@/lib/api/responses";
 export const runtime = "nodejs";
 const QuerySchema = z.object({ latitude: z.coerce.number().min(-90).max(90), longitude: z.coerce.number().min(-180).max(180) });
 
+function fixedDemoWeather() {
+  return WeatherContextSchema.parse({ minApparentTempC: 12, maxApparentTempC: 17, precipitationProbability: 42, expectedRain: true, windy: false, summary: "58° · Light rain", sourceTimestamp: Date.now() });
+}
+
 export async function GET(request: Request) {
   const requestId = crypto.randomUUID();
-  if (process.env.NEXT_PUBLIC_USE_FIXED_DEMO_WEATHER !== "false") return noStoreJson({ requestId, weather: { minApparentTempC: 12, maxApparentTempC: 17, precipitationProbability: 42, expectedRain: true, windy: false, summary: "58° · Light rain", sourceTimestamp: Date.now() } });
   const url = new URL(request.url);
+  const hasLatitude = url.searchParams.has("latitude");
+  const hasLongitude = url.searchParams.has("longitude");
+  if (!hasLatitude && !hasLongitude) return noStoreJson({ requestId, weather: fixedDemoWeather(), source: "fixed-demo" });
   const query = QuerySchema.safeParse({ latitude: url.searchParams.get("latitude"), longitude: url.searchParams.get("longitude") });
   if (!query.success) return apiError(requestId, 400, "INVALID_LOCATION", "Choose a valid location.");
   try {
@@ -23,7 +29,7 @@ export async function GET(request: Request) {
     const rain = hourly.precipitation_probability.slice(0, 12);
     const wind = hourly.wind_speed_10m.slice(0, 12);
     const weather = WeatherContextSchema.parse({ minApparentTempC: Math.min(...temperatures), maxApparentTempC: Math.max(...temperatures), precipitationProbability: Math.max(...rain), expectedRain: Math.max(...rain) >= 40, windy: Math.max(...wind) >= 28, summary: Math.max(...rain) >= 40 ? "Light rain possible" : "Mild and dry", sourceTimestamp: Date.now() });
-    return noStoreJson({ requestId, weather });
+    return noStoreJson({ requestId, weather, source: "open-meteo" });
   } catch {
     return apiError(requestId, 502, "WEATHER_FAILED", "Weather is unavailable.", true);
   }

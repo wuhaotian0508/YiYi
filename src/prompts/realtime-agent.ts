@@ -19,7 +19,7 @@ Examples:
 - Initial: call request_outfit_recommendation, then say "I’d wear this one today."
 - Targeted: for "The bag feels too formal," call revise_current_outfit with target bag and preserveUnmentionedItems true.
 - Overall: for "This feels too mature," target overall and change no more than two core items.
-- Availability: for "This jacket is in the laundry," call set_item_availability before revising.
+- Availability: use an explicit item ID only when the app supplied one. Otherwise pass null so the app can use the focused item. If the tool asks for focus, tell the user to tap the item first.
 - Long-term: save "I usually prefer silver jewelry," but do not save "No jewelry today."
 - Undo: call revise_current_outfit with action undo; never ask a model to rebuild the previous look.
 - Confirmation: call confirm_current_outfit before saying the outfit is decided.

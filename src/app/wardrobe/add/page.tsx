@@ -5,14 +5,17 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Camera, Check, ChevronLeft, ChevronRight, ImagePlus, RotateCcw } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { z } from "zod";
 import { YiYiMark } from "@/components/brand/yiyi-mark";
 import { PrimaryButton } from "@/components/ui/buttons";
+import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { Garment } from "@/components/wardrobe/garment";
 import { ItemImageSetSchema, WardrobeAnalysisSchema, WardrobeItemSchema, type WardrobeAnalysis, type WardrobeItem } from "@/domain/schemas";
 import { clothingCategories, colorHex, colorIds, colorLabels, commonMaterials } from "@/domain/taxonomy";
-import { db } from "@/lib/storage/db";
+import { db, setExperienceMode } from "@/lib/storage/db";
 import { demoWardrobe } from "@/mocks/wardrobe";
+import { calmSpring } from "@/lib/motion/tokens";
 
 type Step = "choose" | "processing" | "review" | "error";
 type Sheet = "color" | "material" | "category" | null;
@@ -105,6 +108,7 @@ export default function AddWardrobePage() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => () => {
     controllerRef.current?.abort();
@@ -191,6 +195,7 @@ export default function AddWardrobePage() {
         await db.wardrobeItems.add(item);
         await db.itemImages.add(images);
       });
+      await setExperienceMode("personal");
       router.push("/wardrobe");
     } catch {
       setError("This item could not be saved. Please try again.");
@@ -212,7 +217,8 @@ export default function AddWardrobePage() {
     ...analysis, id: "99999999-9999-4999-8999-999999999999", schemaVersion: 1, availability: "available", createdAt: Date.now(), updatedAt: Date.now(), lastWornAt: null,
   }) : null;
 
-  return <main className="phone-page"><div className="page-column"><header className="topbar"><Link href="/wardrobe" className="icon-button" aria-label="Back"><ChevronLeft /></Link><div className="topbar-title">{step === "review" ? "Review item" : "Add clothes"}</div><span /></header>{step === "choose" && <Choose onFile={(file) => void chooseFile(file)} />}{step === "processing" && <Processing />}{step === "error" && <ProcessingError message={error} onRetry={() => setStep("choose")} />}{step === "review" && reviewItem && analysis && <Review item={reviewItem} preview={preview} onSheet={setSheet} onSave={() => void saveItem()} saving={saving} />}{sheet && analysis && <><button className="sheet-scrim" aria-label="Close sheet" onClick={() => setSheet(null)} /><div className="bottom-sheet"><div className="sheet-handle" />{sheet === "color" && <ColorSheet value={analysis.primaryColor} onChange={(primaryColor) => updateAnalysis({ primaryColor })} onDone={() => setSheet(null)} />}{sheet === "material" && <MaterialSheet value={analysis.materials[0] ?? "Unknown"} onChange={(material) => updateAnalysis({ materials: [material] })} onDone={() => setSheet(null)} />}{sheet === "category" && <CategorySheet value={analysis.category} onChange={(category) => updateAnalysis({ category })} onDone={() => setSheet(null)} />}</div></>}</div></main>;
+  const sheetLabel = sheet === "color" ? "Select colors" : sheet === "material" ? "Select materials" : "Select category";
+  return <main className="phone-page"><div className="page-column"><header className="topbar"><Link href="/wardrobe" className="icon-button" aria-label="Back"><ChevronLeft /></Link><div className="topbar-title">{step === "review" ? "Review item" : "Add clothes"}</div><span /></header><AnimatePresence mode="popLayout" initial={false}><motion.div className="add-flow-motion" key={step} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -5 }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{step === "choose" && <Choose onFile={(file) => void chooseFile(file)} />}{step === "processing" && <Processing />}{step === "error" && <ProcessingError message={error} onRetry={() => setStep("choose")} />}{step === "review" && reviewItem && analysis && <Review item={reviewItem} preview={preview} onSheet={setSheet} onSave={() => void saveItem()} saving={saving} />}</motion.div></AnimatePresence><BottomSheet open={Boolean(sheet && analysis)} onClose={() => setSheet(null)} label={sheetLabel}>{analysis && <>{sheet === "color" && <ColorSheet value={analysis.primaryColor} onChange={(primaryColor) => updateAnalysis({ primaryColor })} onDone={() => setSheet(null)} />}{sheet === "material" && <MaterialSheet value={analysis.materials[0] ?? "Unknown"} onChange={(material) => updateAnalysis({ materials: [material] })} onDone={() => setSheet(null)} />}{sheet === "category" && <CategorySheet value={analysis.category} onChange={(category) => updateAnalysis({ category })} onDone={() => setSheet(null)} />}</>}</BottomSheet></div></main>;
 }
 
 function Choose({ onFile }: { onFile: (file?: File) => void }) {

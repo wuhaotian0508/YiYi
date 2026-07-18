@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
 import { Check, Mic, X } from "lucide-react";
 import { YiYiMark } from "@/components/brand/yiyi-mark";
 import { PrimaryButton, SecondaryButton } from "@/components/ui/buttons";
 import { VoiceCore } from "@/components/voice/voice-core";
 import { copy } from "@/content/copy";
-import { requestPersistentStorage, seedPreferences, seedWardrobe } from "@/lib/storage/db";
+import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
+import { requestPersistentStorage, savePreferences, seedWardrobe, setExperienceMode } from "@/lib/storage/db";
 import { demoPreferenceProfile, demoWardrobe } from "@/mocks/wardrobe";
+import { calmSpring } from "@/lib/motion/tokens";
 
 type Stage = "splash" | "teach" | "understand" | "recommend" | "permission" | "denied" | "likes" | "least" | "avoids" | "profile" | "setup";
 const avoids = ["Heels", "Tight fits", "Cropped tops", "Short skirts", "Bright colors", "Formal looks", "Gold-tone jewelry", "Silver-tone jewelry"];
@@ -42,8 +44,9 @@ export default function FirstRunPage() {
   }
 
   async function finishWithExampleWardrobe() {
-    await seedWardrobe(demoWardrobe);
-    await seedPreferences({
+    await setExperienceMode("demo", true);
+    await seedWardrobe(demoWardrobe, { explicit: true });
+    await savePreferences({
       ...demoPreferenceProfile,
       hardAvoids: selectedAvoids.map((value) => ({ key: "onboarding", value: value.toLowerCase(), strength: "hard" as const })),
       updatedAt: Date.now(),
@@ -53,9 +56,20 @@ export default function FirstRunPage() {
     router.push("/today");
   }
 
+  async function finishWithPersonalWardrobe() {
+    await setExperienceMode("personal");
+    await savePreferences({
+      ...createNeutralPreferenceProfile(),
+      hardAvoids: selectedAvoids.map((value) => ({ key: "onboarding", value: value.toLowerCase(), strength: "hard" as const })),
+      updatedAt: Date.now(),
+    });
+    localStorage.setItem("yiyi:onboarding-complete", "true");
+    router.push("/wardrobe/add");
+  }
+
   return (
     <main className="phone-page">
-      <AnimatePresence mode="wait">
+      <AnimatePresence initial={false}>
         {stage === "splash" && <Splash key="splash" />}
         {stage === "teach" && <Teaching key="teach" onNext={() => setStage("understand")} />}
         {stage === "understand" && <UnderstandingDemo key="understand" onNext={() => setStage("recommend")} />}
@@ -65,18 +79,20 @@ export default function FirstRunPage() {
         {stage === "least" && <StyleLeast key="least" selected={least} onChange={setLeast} onNext={() => setStage("avoids")} />}
         {stage === "avoids" && <Avoids key="avoids" selected={selectedAvoids} onChange={setSelectedAvoids} onNext={() => setStage("profile")} />}
         {stage === "profile" && <Profile key="profile" avoids={selectedAvoids} onNext={() => setStage("setup")} />}
-        {stage === "setup" && <WardrobeSetup key="setup" onExample={finishWithExampleWardrobe} onPersonal={() => { void seedPreferences(demoPreferenceProfile); localStorage.setItem("yiyi:onboarding-complete", "true"); router.push("/wardrobe/add"); }} />}
+        {stage === "setup" && <WardrobeSetup key="setup" onExample={finishWithExampleWardrobe} onPersonal={() => void finishWithPersonalWardrobe()} />}
       </AnimatePresence>
     </main>
   );
 }
 
 function Screen({ children }: { children: React.ReactNode }) {
-  return <motion.section className="page-column" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: .24 }}>{children}</motion.section>;
+  const reduceMotion = useReducedMotion();
+  const isPresent = useIsPresent();
+  return <motion.section className="page-column onboarding-screen" aria-hidden={!isPresent} inert={!isPresent ? true : undefined} style={{ pointerEvents: isPresent ? "auto" : "none" }} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 18, scale: 0.995 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -14, scale: 0.997 }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{children}</motion.section>;
 }
 
 function Splash() {
-  return <Screen><div className="center-stage"><div><motion.h1 className="page-title" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .5 }}>{copy.splash.title}</motion.h1><motion.div className="body-copy" style={{ marginTop: 22, display: "flex", gap: 7, alignItems: "center", justifyContent: "center" }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .45, duration: .45 }}><span>{copy.splash.subtitleStart}</span><YiYiMark size={34} /><span>{copy.splash.subtitleEnd}</span></motion.div></div></div></Screen>;
+  return <Screen><div className="center-stage splash-stage"><div><motion.h1 className="page-title" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .48, ease: [0.22, 1, 0.36, 1] }}>{copy.splash.title}</motion.h1><motion.div className="body-copy splash-subtitle" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .42, duration: .42, ease: [0.22, 1, 0.36, 1] }}><span>{copy.splash.subtitleStart}</span><YiYiMark size={34} /><span>{copy.splash.subtitleEnd}</span></motion.div></div></div></Screen>;
 }
 
 function Teaching({ onNext }: { onNext: () => void }) {
@@ -84,7 +100,7 @@ function Teaching({ onNext }: { onNext: () => void }) {
 }
 
 function UnderstandingDemo({ onNext }: { onNext: () => void }) {
-  return <Screen><div className="topbar"><span /><div className="topbar-title">How YiYi listens</div><span /></div><div className="center-stage" style={{ alignContent: "center" }}><div><div className="transcript-bubble" style={{ margin: "0 auto 30px", textAlign: "left" }}>“I have class, then dinner with friends. I’ll be walking a lot, and I want something relaxed but still photo-ready.”</div><VoiceCore active /><p className="secondary-copy">Understanding…</p><div className="chip-row" style={{ marginTop: 25 }}>{["Class", "Dinner with friends", "Lots of walking", "Relaxed", "Photo-ready"].map((tag) => <span className="chip" key={tag}>{tag}</span>)}</div></div></div><div className="bottom-bar"><PrimaryButton onClick={onNext}>Continue</PrimaryButton></div></Screen>;
+  return <Screen><div className="topbar"><span /><div className="topbar-title">How YiYi listens</div><span /></div><div className="center-stage understanding-demo"><div><div className="transcript-bubble">“I have class, then dinner with friends. I’ll be walking a lot, and I want something relaxed but still photo-ready.”</div><VoiceCore state="thinking" label="Understanding example" /><p className="secondary-copy">Understanding…</p><div className="chip-row demo-tags">{["Class", "Dinner with friends", "Lots of walking", "Relaxed", "Photo-ready"].map((tag, index) => <motion.span className="chip" key={tag} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 * index + 0.18, duration: 0.2 }}>{tag}</motion.span>)}</div></div></div><div className="bottom-bar"><PrimaryButton onClick={onNext}>Continue</PrimaryButton></div></Screen>;
 }
 
 function RecommendationDemo({ onNext }: { onNext: () => void }) {

@@ -2,6 +2,8 @@
 
 Every route validates request and response with Zod, returns a request ID, uses the common error envelope, runs on the intended Vercel runtime, avoids provider-body leakage, and never logs secrets or image/audio content.
 
+Live provider calls emit one-line structured diagnostics containing only request ID, route, provider/model, HTTP status category when available, duration, safe error code/type, and aggregate token usage when available. They never include credentials, ephemeral secrets, images/Data URLs, prompts, transcripts, or provider response bodies.
+
 ## Common error
 
 ```ts
@@ -16,7 +18,7 @@ type ApiError = {
 - `POST /api/realtime/token`: same-origin, no-cache ephemeral client secret `{ requestId, value, model, voice }`; model and voice keep the SDK session aligned with the minted secret.
 - `POST /api/wardrobe/process`: one validated multipart image; returns `{ requestId, cutoutDataUrl, analysis }`. The client converts the string to a Blob immediately.
 - `POST /api/outfits/rank`: original utterance, intent, preference summary, optional weather, and maximum eight supplied candidates with compact boards; returns three validated supplied IDs and short reasons.
-- `GET /api/weather`: validated coordinates/city to normalized next-12-hour weather; 15-minute cache.
+- `GET /api/weather`: without coordinates, returns the fixed competition-demo weather; with validated latitude and longitude, returns normalized Open-Meteo weather. Today currently uses the fixed demo path and does not request location permission.
 - `GET /api/health`: configuration presence, mock/live mode, and app version only—never secret values.
 
 ## External providers

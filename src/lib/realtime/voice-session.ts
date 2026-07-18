@@ -16,12 +16,16 @@ export interface VoiceSessionAdapter {
 }
 
 export type VoiceToolHandlers = {
-  requestRecommendation(intent: z.infer<typeof DailyIntentSchema>): Promise<{ success: true; summary: string }>;
+  requestRecommendation(intent: z.infer<typeof DailyIntentSchema>): Promise<{ success: boolean; summary: string }>;
   revise(input: { target: string; revision: string; preserveUnmentionedItems: boolean; referencedItemId: string | null; action: "revise" | "undo" }): Promise<{ success: boolean; summary: string }>;
   confirm(note: string | null): Promise<{ success: boolean; summary: string }>;
-  setAvailability(input: { itemId: string; availability: "available" | "laundry" | "unavailable"; reason: string | null }): Promise<{ success: boolean; summary: string }>;
+  setAvailability(input: { itemId: string | null; availability: "available" | "laundry" | "unavailable"; reason: string | null }): Promise<{ success: boolean; summary: string }>;
   savePreference(input: { rule: string; polarity: "prefer" | "avoid"; evidencePhrase: string }): Promise<{ success: boolean; summary: string }>;
 };
+
+export function resolveAvailabilityItemId(explicitItemId: string | null, focusedItemId: string | null) {
+  return explicitItemId ?? focusedItemId;
+}
 
 const revisionSchema = z.object({
   target: z.enum([...clothingCategories, "overall"]),
@@ -36,7 +40,7 @@ function toolsFor(handlers: VoiceToolHandlers) {
     tool({ name: "request_outfit_recommendation", description: "Create one main outfit and two alternatives from a complete daily intent.", parameters: DailyIntentSchema, strict: true, timeoutMs: 25_000, execute: (input) => handlers.requestRecommendation(input) }),
     tool({ name: "revise_current_outfit", description: "Revise only the requested outfit target, or undo the last version.", parameters: revisionSchema, strict: true, timeoutMs: 20_000, execute: (input) => handlers.revise(input) }),
     tool({ name: "confirm_current_outfit", description: "Confirm and persist the current outfit before telling the user it is decided.", parameters: z.object({ note: z.string().max(160).nullable() }).strict(), strict: true, timeoutMs: 8_000, execute: ({ note }) => handlers.confirm(note) }),
-    tool({ name: "set_item_availability", description: "Mark a focused wardrobe item available, in laundry, or unavailable.", parameters: z.object({ itemId: z.string().uuid(), availability: z.enum(["available", "laundry", "unavailable"]), reason: z.string().max(120).nullable() }).strict(), strict: true, timeoutMs: 8_000, execute: (input) => handlers.setAvailability(input) }),
+    tool({ name: "set_item_availability", description: "Mark an explicit item ID or the currently focused wardrobe item available, in laundry, or unavailable. Pass null when no item ID is known.", parameters: z.object({ itemId: z.string().uuid().nullable(), availability: z.enum(["available", "laundry", "unavailable"]), reason: z.string().max(120).nullable() }).strict(), strict: true, timeoutMs: 8_000, execute: (input) => handlers.setAvailability(input) }),
     tool({ name: "save_explicit_preference", description: "Save only an explicit or repeated long-term preference.", parameters: z.object({ rule: z.string().min(1).max(120), polarity: z.enum(["prefer", "avoid"]), evidencePhrase: z.string().min(1).max(200) }).strict(), strict: true, timeoutMs: 8_000, execute: (input) => handlers.savePreference(input) }),
   ];
 }

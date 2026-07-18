@@ -2,20 +2,24 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
 import { ChevronLeft, ChevronRight, MicOff, Shirt, SlidersHorizontal, Undo2, Volume2, XCircle } from "lucide-react";
-import { VoiceCore } from "@/components/voice/voice-core";
+import { VoiceCore, VoiceStatusMark, type VoiceVisualState } from "@/components/voice/voice-core";
+import { OutfitCarousel } from "@/components/outfit/outfit-carousel";
 import { OutfitCanvas } from "@/components/outfit/outfit-canvas";
 import { PrimaryButton, SecondaryButton } from "@/components/ui/buttons";
+import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { copy } from "@/content/copy";
 import { changedAndPreserved, generateCandidates, reviseOverall, reviseTargeted, type RevisionTarget } from "@/domain/recommendation/engine";
+import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
 import { OutfitVersionSchema, WeatherContextSchema, type DailyIntent, type Outfit, type PreferenceProfile, type WardrobeItem, type WeatherContext } from "@/domain/schemas";
 import { rankOutfits } from "@/lib/recommendation/client-ranking";
-import { MockVoiceSessionAdapter, OpenAIRealtimeVoiceAdapter, type TranscriptState, type VoiceSessionAdapter, type VoiceToolHandlers } from "@/lib/realtime/voice-session";
-import { db, seedPreferences, seedWardrobe } from "@/lib/storage/db";
+import { MockVoiceSessionAdapter, OpenAIRealtimeVoiceAdapter, resolveAvailabilityItemId, type TranscriptState, type VoiceSessionAdapter, type VoiceState, type VoiceToolHandlers } from "@/lib/realtime/voice-session";
+import { db, getExperienceMode, seedPreferences, seedWardrobe } from "@/lib/storage/db";
+import { calmSpring } from "@/lib/motion/tokens";
 import { demoIntent, demoPreferenceProfile, demoWardrobe } from "@/mocks/wardrobe";
 
-type Phase = "idle" | "connecting" | "listening" | "understanding" | "presenting" | "revising" | "confirmed" | "error";
+type Phase = "idle" | "connecting" | "listening" | "understanding" | "generating" | "presenting" | "revising" | "confirmed" | "error";
 type OutfitSlot = keyof Outfit["itemIds"];
 type IntentTag = { id: string; kind: "activity" | "aesthetic" | "excluded"; index: number; label: string };
 
@@ -33,7 +37,7 @@ function intentTags(intent: DailyIntent): IntentTag[] {
 }
 
 function preferenceSummary(profile: PreferenceProfile | undefined) {
-  if (!profile) return "Relaxed, clean, comfort-first, and silver-tone jewelry.";
+  if (!profile) return "No saved long-term preferences.";
   const avoids = profile.hardAvoids.map((rule) => rule.value).join(", ");
   const prefers = profile.softPreferences.map((rule) => rule.value).join(", ");
   return `Prefers ${prefers || "balanced looks"}. Avoids ${avoids || "nothing explicit"}.`;
@@ -50,8 +54,9 @@ function targetToSlot(target: string, focused: OutfitSlot | null): Exclude<Revis
 export default function TodayPage() {
   const initialCandidates = useMemo(() => generateCandidates(demoWardrobe, demoIntent), []);
   const [phase, setPhase] = useState<Phase>("idle");
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [hydrated, setHydrated] = useState(false);
-  const [wardrobe, setWardrobe] = useState<WardrobeItem[]>(demoWardrobe);
+  const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([]);
   const [intent, setIntent] = useState<DailyIntent>(demoIntent);
   const [ranked, setRanked] = useState<Outfit[]>(initialCandidates.slice(0, 3));
   const [current, setCurrent] = useState<Outfit | null>(initialCandidates[0] ?? null);
@@ -73,7 +78,6 @@ export default function TodayPage() {
   const lastPersistedOutfitRef = useRef<Outfit | null>(null);
   const inactivityTimerRef = useRef<number | null>(null);
   const lifetimeTimerRef = useRef<number | null>(null);
-  const pointerStartRef = useRef<number | null>(null);
   const currentRef = useRef(current);
   const wardrobeRef = useRef(wardrobe);
   const intentRef = useRef(intent);
@@ -90,11 +94,11 @@ export default function TodayPage() {
   weatherRef.current = weather;
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setHydrated(true));
     let cancelled = false;
     void (async () => {
       await seedWardrobe(demoWardrobe);
-      await seedPreferences(demoPreferenceProfile);
+      const experienceMode = await getExperienceMode();
+      await seedPreferences(experienceMode === "personal" ? createNeutralPreferenceProfile() : demoPreferenceProfile);
       const weatherResponse = await fetch("/api/weather", { cache: "no-store" }).catch(() => null);
       if (weatherResponse?.ok) {
         const payload: unknown = await weatherResponse.json();
@@ -105,7 +109,9 @@ export default function TodayPage() {
       const sessions = await db.dailySessions.where("dateKey").equals(localDateKey()).toArray();
       const session = sessions.sort((a, b) => b.updatedAt - a.updatedAt)[0];
       if (cancelled) return;
-      setWardrobe(items.length ? items : demoWardrobe);
+      setWardrobe(items);
+      wardrobeRef.current = items;
+      setHydrated(true);
       if (session?.status === "confirmed" && session.currentVersionId) {
         const version = await db.outfitVersions.get(session.currentVersionId);
         if (!cancelled && version) {
@@ -130,7 +136,6 @@ export default function TodayPage() {
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
-      window.cancelAnimationFrame(frame);
       document.removeEventListener("visibilitychange", onVisibility);
       rankAbortRef.current?.abort();
       unsubscribeRef.current.forEach((unsubscribe) => unsubscribe());
@@ -159,6 +164,7 @@ export default function TodayPage() {
     const adapter = adapterRef.current;
     adapterRef.current = null;
     if (adapter) await adapter.disconnect();
+    setVoiceState("idle");
     if (nextPhase) setPhase(nextPhase);
   }
 
@@ -203,6 +209,7 @@ export default function TodayPage() {
       return { success: false as const, summary: "There are not enough available pieces for three complete outfits." };
     }
     const profile = await db.preferenceProfiles.get("default");
+    setPhase("generating");
     const result = await rankOutfits({
       candidates, wardrobe: availableWardrobe, intent: nextIntent, originalUtterance: utterance,
       preferenceSummary: preferenceSummary(profile), weather: weatherRef.current, signal: controller.signal,
@@ -289,8 +296,7 @@ export default function TodayPage() {
   function createHandlers(): VoiceToolHandlers {
     return {
       requestRecommendation: async (nextIntent) => {
-        const result = await runRecommendation(nextIntent, nextIntent.freeformSummary);
-        return { success: true, summary: result.summary };
+        return runRecommendation(nextIntent, nextIntent.freeformSummary);
       },
       revise: async (input) => {
         if (input.action === "undo") return { success: undo(), summary: "I went back to the previous outfit." };
@@ -316,9 +322,11 @@ export default function TodayPage() {
       },
       confirm: async () => confirmCurrent(),
       setAvailability: async (input) => {
-        const itemId = input.itemId || (focusedSlotRef.current ? currentRef.current?.itemIds[focusedSlotRef.current] : undefined);
-        if (!itemId) return { success: false, summary: "Tap the item first." };
-        await db.wardrobeItems.update(itemId, { availability: input.availability, unavailableReason: input.reason ?? undefined, updatedAt: Date.now() });
+        const focusedItemId = focusedSlotRef.current ? currentRef.current?.itemIds[focusedSlotRef.current] ?? null : null;
+        const itemId = resolveAvailabilityItemId(input.itemId, focusedItemId);
+        if (!itemId) return { success: false, summary: "Tap the item you mean, then tell me its availability again." };
+        const updated = await db.wardrobeItems.update(itemId, { availability: input.availability, unavailableReason: input.reason ?? undefined, updatedAt: Date.now() });
+        if (!updated) return { success: false, summary: "I could not find that wardrobe item." };
         const items = await db.wardrobeItems.toArray();
         setWardrobe(items);
         wardrobeRef.current = items;
@@ -344,15 +352,18 @@ export default function TodayPage() {
   async function startSession() {
     if (!hydrated || adapterRef.current) return;
     setPhase("connecting");
+    setVoiceState("connecting");
     const adapter = process.env.NEXT_PUBLIC_VOICE_MODE === "live"
       ? new OpenAIRealtimeVoiceAdapter(createHandlers())
       : new MockVoiceSessionAdapter();
     adapterRef.current = adapter;
     const onState = adapter.onState((state) => {
       resetInactivityTimer();
+      setVoiceState(state);
       if (state === "connecting") setPhase("connecting");
       if (state === "listening") setPhase((value) => value === "presenting" || value === "revising" ? value : "listening");
-      if (state === "thinking") setPhase((value) => value === "presenting" ? value : "understanding");
+      if (state === "thinking") setPhase((value) => value === "presenting" || value === "revising" ? value : "understanding");
+      if (state === "speaking" || state === "interrupted") setPhase((value) => value === "presenting" || value === "revising" ? value : "listening");
       if (state === "error") setPhase("error");
     });
     const onTranscript = adapter.onTranscript((nextTranscript: TranscriptState) => {
@@ -402,7 +413,7 @@ export default function TodayPage() {
 
   const tags = intentTags(intent);
   return (
-    <main className="phone-page">
+    <main className="phone-page today-page">
       <div className="page-column">
         <header className="topbar">
           <Link className="icon-button" href="/wardrobe" aria-label="Open wardrobe"><Shirt size={21} strokeWidth={1.6} /></Link>
@@ -410,51 +421,58 @@ export default function TodayPage() {
           <Link className="icon-button" href="/preferences" aria-label="Open preferences"><SlidersHorizontal size={20} strokeWidth={1.6} /></Link>
         </header>
 
-        <AnimatePresence mode="wait">
+        <AnimatePresence initial={false}>
           {phase === "idle" && <Idle key="idle" onStart={startSession} hydrated={hydrated} />}
-          {(phase === "connecting" || phase === "listening" || phase === "understanding") && <Listening key="listening" phase={phase} transcript={transcript} tags={tags} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }} muted={muted} onMute={toggleMute} onEnd={() => void disconnectVoice("idle")} />}
+          {(phase === "connecting" || phase === "listening" || phase === "understanding" || phase === "generating") && <Listening key="listening" phase={phase} voiceState={voiceState} transcript={transcript} tags={tags} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }} muted={muted} onMute={toggleMute} onEnd={() => void disconnectVoice("idle")} />}
           {(phase === "presenting" || phase === "revising") && current && (
-            <Result key="result" current={current} wardrobe={wardrobe} ranked={ranked} selectedIndex={selectedIndex} reason={reason} phase={phase} tags={tags}
+            <Result key="result" wardrobe={wardrobe} ranked={ranked} selectedIndex={selectedIndex} reason={reason} phase={phase} tags={tags}
               focusedSlot={focusedSlot} onFocus={setFocusedSlot} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }}
-              onSelect={selectOutfit} onRevise={revise} onUndo={undo} canUndo={history.length > 0} onConfirm={() => void confirmCurrent()}
-              onSwipeStart={(x) => { pointerStartRef.current = x; }} onSwipeEnd={(x) => { const start = pointerStartRef.current; if (start !== null && Math.abs(x - start) > 45) selectOutfit(Math.max(0, Math.min(ranked.length - 1, selectedIndex + (x < start ? 1 : -1)))); pointerStartRef.current = null; }} />
+              voiceState={voiceState} onSelect={selectOutfit} onRevise={revise} onUndo={undo} canUndo={history.length > 0} onConfirm={() => void confirmCurrent()} />
           )}
           {phase === "confirmed" && current && <Confirmed key="confirmed" current={current} wardrobe={wardrobe} onRevise={() => setPhase("presenting")} />}
           {phase === "error" && <ErrorState key="error" onRetry={() => void disconnectVoice("idle")} />}
         </AnimatePresence>
-        {editingTag && <IntentTagSheet tag={editingTag} value={tagDraft} onChange={setTagDraft} onClose={() => setEditingTag(null)} onSave={() => void applyTagEdit()} onRemove={() => void applyTagEdit(true)} />}
+        <BottomSheet open={Boolean(editingTag)} onClose={() => setEditingTag(null)} label="Edit today’s intent">
+          {editingTag && <IntentTagSheet tag={editingTag} value={tagDraft} onChange={setTagDraft} onSave={() => void applyTagEdit()} onRemove={() => void applyTagEdit(true)} />}
+        </BottomSheet>
       </div>
     </main>
   );
 }
 
 function MotionSection({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <motion.section className={className} style={{ flex: 1, display: "flex", flexDirection: "column" }} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .24 }}>{children}</motion.section>;
+  const reduceMotion = useReducedMotion();
+  const isPresent = useIsPresent();
+  return <motion.section className={className} aria-hidden={!isPresent} inert={!isPresent ? true : undefined} style={{ flex: 1, minWidth: 0, minHeight: 0, width: "100%", display: "flex", flexDirection: "column", pointerEvents: isPresent ? "auto" : "none" }} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.995 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -5, scale: 0.998 }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{children}</motion.section>;
 }
 
 function Idle({ onStart, hydrated }: { onStart: () => void; hydrated: boolean }) {
-  return <MotionSection><div className="center-stage"><div><VoiceCore active={false} onClick={onStart} disabled={!hydrated} /><h1 style={{ fontSize: 20, fontWeight: 530, marginTop: 24 }}>{copy.today.prompt}</h1><p className="secondary-copy" style={{ maxWidth: 280, margin: "16px auto" }}>“{copy.today.example}”</p><div className="waveform" style={{ margin: "34px auto 0" }} /></div></div></MotionSection>;
+  return <MotionSection><div className="center-stage today-idle"><div><VoiceCore state="idle" onClick={onStart} disabled={!hydrated} /><h1>{copy.today.prompt}</h1><p className="secondary-copy">“{copy.today.example}”</p><div className="waveform waveform-idle" /></div></div></MotionSection>;
 }
 
-function Listening({ phase, transcript, tags, muted, onMute, onEnd, onEditTag }: { phase: "connecting" | "listening" | "understanding"; transcript: string; tags: IntentTag[]; muted: boolean; onMute: () => void; onEnd: () => void; onEditTag: (tag: IntentTag) => void }) {
-  const status = phase === "connecting" ? "Starting live voice…" : phase === "listening" ? copy.today.listening : copy.today.understanding;
-  return <MotionSection><div className="center-stage"><div><VoiceCore active={phase !== "connecting"} /><h1 style={{ fontSize: 16, fontWeight: 520, marginTop: 20 }}>{status}</h1>{phase !== "understanding" ? <><p className="body-copy live-transcript">“{transcript}”</p><div className="waveform" style={{ margin: "0 auto" }} /></> : <div className="chip-row" style={{ marginTop: 28 }}>{tags.map((tag) => <button className="chip" key={tag.id} onClick={() => onEditTag(tag)}>{tag.label}</button>)}</div>}</div></div><div className="bottom-bar"><SecondaryButton onClick={onMute}>{muted ? <Volume2 size={16} /> : <MicOff size={16} />} {muted ? "Unmute" : "Mute"}</SecondaryButton><SecondaryButton onClick={onEnd}><XCircle size={16} /> End session</SecondaryButton></div></MotionSection>;
+function Listening({ phase, voiceState, transcript, tags, muted, onMute, onEnd, onEditTag }: { phase: "connecting" | "listening" | "understanding" | "generating"; voiceState: VoiceState; transcript: string; tags: IntentTag[]; muted: boolean; onMute: () => void; onEnd: () => void; onEditTag: (tag: IntentTag) => void }) {
+  const visualState: VoiceVisualState = phase === "connecting" ? "connecting" : phase === "understanding" || phase === "generating" ? "thinking" : voiceState === "speaking" || voiceState === "interrupted" ? voiceState : "listening";
+  const status = phase === "connecting" ? "Starting live voice…" : phase === "generating" ? "Building your outfit…" : visualState === "speaking" ? "Speaking…" : visualState === "interrupted" ? "Listening again…" : phase === "listening" ? copy.today.listening : copy.today.understanding;
+  const showTranscript = phase === "listening";
+  return <MotionSection><div className="center-stage voice-session-stage"><div><VoiceCore state={visualState} label={status} /><AnimatePresence mode="popLayout"><motion.h1 key={status} className="voice-state-title" initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -2 }} transition={{ duration: 0.16 }}>{status}</motion.h1></AnimatePresence><AnimatePresence mode="wait" initial={false}>{showTranscript ? <motion.div key="transcript" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><p className="body-copy live-transcript">“{transcript}”</p><div className="waveform waveform-live" /></motion.div> : <motion.div className="chip-row understood-tags" key="tags" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>{tags.map((tag) => <button className="chip" key={tag.id} onClick={() => onEditTag(tag)}>{tag.label}</button>)}</motion.div>}</AnimatePresence></div></div><div className="bottom-bar session-controls"><SecondaryButton onClick={onMute}>{muted ? <Volume2 size={16} /> : <MicOff size={16} />} {muted ? "Unmute" : "Mute"}</SecondaryButton><SecondaryButton onClick={onEnd}><XCircle size={16} /> End session</SecondaryButton></div></MotionSection>;
 }
 
-function Result({ current, wardrobe, ranked, selectedIndex, reason, phase, tags, focusedSlot, onFocus, onEditTag, onSelect, onRevise, onUndo, canUndo, onConfirm, onSwipeStart, onSwipeEnd }: {
-  current: Outfit; wardrobe: WardrobeItem[]; ranked: Outfit[]; selectedIndex: number; reason: string; phase: "presenting" | "revising"; tags: IntentTag[]; focusedSlot: OutfitSlot | null;
+function Result({ wardrobe, ranked, selectedIndex, reason, phase, tags, focusedSlot, voiceState, onFocus, onEditTag, onSelect, onRevise, onUndo, canUndo, onConfirm }: {
+  wardrobe: WardrobeItem[]; ranked: Outfit[]; selectedIndex: number; reason: string; phase: "presenting" | "revising"; tags: IntentTag[]; focusedSlot: OutfitSlot | null;
+  voiceState: VoiceState;
   onFocus: (slot: OutfitSlot) => void; onEditTag: (tag: IntentTag) => void; onSelect: (index: number) => void; onRevise: (slot?: OutfitSlot) => void;
-  onUndo: () => void; canUndo: boolean; onConfirm: () => void; onSwipeStart: (x: number) => void; onSwipeEnd: (x: number) => void;
+  onUndo: () => void; canUndo: boolean; onConfirm: () => void;
 }) {
-  return <MotionSection className="result-section"><div className="result-heading"><h1>{selectedIndex === 0 ? copy.outfit.main : selectedIndex === 1 ? "A more relaxed direction." : "A more polished direction."}</h1><p className="secondary-copy">{canUndo ? copy.outfit.revised : reason}</p></div><div className="intent-strip">{tags.map((tag) => <button className="chip" key={tag.id} onClick={() => onEditTag(tag)}>{tag.label}</button>)}</div><div className="outfit-stage" onPointerDown={(event) => onSwipeStart(event.clientX)} onPointerUp={(event) => onSwipeEnd(event.clientX)}>{phase === "revising" && <div className="transcript-bubble revision-bubble">“The bag feels too formal.”</div>}<OutfitCanvas outfit={current} wardrobe={wardrobe} onSelect={onFocus} />{ranked.length > 1 && <><button className="carousel-arrow carousel-arrow-left" aria-label="Previous outfit" disabled={selectedIndex === 0} onClick={() => onSelect(selectedIndex - 1)}><ChevronLeft /></button><button className="carousel-arrow carousel-arrow-right" aria-label="Next outfit" disabled={selectedIndex === ranked.length - 1} onClick={() => onSelect(selectedIndex + 1)}><ChevronRight /></button></>}{phase === "revising" && <div className="revision-thinking"><span className="secondary-copy">Thinking…</span></div>}</div><div className="outfit-direction"><span>More relaxed</span><span aria-label={`Outfit ${selectedIndex + 1} of ${ranked.length}`}>{ranked.map((_, index) => <button key={index} aria-label={`Show outfit ${index + 1}`} onClick={() => onSelect(index)}>{index === selectedIndex ? "●" : "•"}</button>)}</span><span>More polished</span></div>{focusedSlot && <div className="soft-card focused-item"><span>Change this {focusedSlot === "extraAccessory" ? "accessory" : focusedSlot}?</span><SecondaryButton onClick={() => onRevise(focusedSlot)}>Replace</SecondaryButton></div>}<button className="voice-toolbar" style={{ width: "100%", border: 0, marginBottom: 10 }} onClick={() => onRevise("bag")}><span style={{ fontSize: 18 }}>◌</span><span style={{ flex: 1, textAlign: "left" }}>{copy.outfit.listening}</span><span className="secondary-copy">Try a bag revision</span></button><div className="bottom-bar" style={{ paddingTop: 0 }}><SecondaryButton disabled={!canUndo} onClick={onUndo}><Undo2 size={16} /> {copy.outfit.undo}</SecondaryButton><PrimaryButton onClick={onConfirm}>{copy.outfit.wear}</PrimaryButton></div></MotionSection>;
+  const compactVoiceState: VoiceVisualState = voiceState === "speaking" || voiceState === "thinking" || voiceState === "interrupted" || voiceState === "error" ? voiceState : "listening";
+  return <MotionSection className="result-section"><div className="result-heading"><AnimatePresence mode="popLayout"><motion.h1 key={selectedIndex} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -3 }} transition={{ duration: 0.18 }}>{selectedIndex === 0 ? copy.outfit.main : selectedIndex === 1 ? "A more relaxed direction." : "A more polished direction."}</motion.h1></AnimatePresence><p className="secondary-copy">{canUndo ? copy.outfit.revised : reason}</p></div><div className="intent-strip">{tags.map((tag) => <button className="chip" key={tag.id} onClick={() => onEditTag(tag)}>{tag.label}</button>)}</div><div className="outfit-stage">{phase === "revising" && <motion.div className="transcript-bubble revision-bubble" initial={{ opacity: 0, y: 6, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0 }}>“The bag feels too formal.”</motion.div>}<OutfitCarousel outfits={ranked} wardrobe={wardrobe} selectedIndex={selectedIndex} onSelect={onSelect} onSelectItem={onFocus} />{ranked.length > 1 && <><button className="carousel-arrow carousel-arrow-left" aria-label="Previous outfit" disabled={selectedIndex === 0} onClick={() => onSelect(selectedIndex - 1)}><ChevronLeft /></button><button className="carousel-arrow carousel-arrow-right" aria-label="Next outfit" disabled={selectedIndex === ranked.length - 1} onClick={() => onSelect(selectedIndex + 1)}><ChevronRight /></button></>}{phase === "revising" && <motion.div className="revision-thinking" initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }}><VoiceStatusMark state="thinking" label="Revising outfit" /></motion.div>}</div><div className="outfit-direction"><span>More relaxed</span><span aria-label={`Outfit ${selectedIndex + 1} of ${ranked.length}`}>{ranked.map((_, index) => <button key={index} aria-label={`Show outfit ${index + 1}`} onClick={() => onSelect(index)}><span className={index === selectedIndex ? "active" : ""} /></button>)}</span><span>More polished</span></div>{focusedSlot && <motion.div className="soft-card focused-item" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={calmSpring}><span>Change this {focusedSlot === "extraAccessory" ? "accessory" : focusedSlot}?</span><SecondaryButton onClick={() => onRevise(focusedSlot)}>Replace</SecondaryButton></motion.div>}<button className="voice-toolbar" onClick={() => onRevise("bag")}><VoiceStatusMark state={compactVoiceState} label={copy.outfit.listening} /><span className="voice-toolbar-label">{copy.outfit.listening}</span><span className="secondary-copy">Try a bag revision</span></button><div className="bottom-bar result-actions"><SecondaryButton disabled={!canUndo} onClick={onUndo}><Undo2 size={16} /> {copy.outfit.undo}</SecondaryButton><PrimaryButton onClick={onConfirm}>{copy.outfit.wear}</PrimaryButton></div></MotionSection>;
 }
 
 function Confirmed({ current, wardrobe, onRevise }: { current: Outfit; wardrobe: WardrobeItem[]; onRevise: () => void }) {
   return <MotionSection><div className="center-stage"><div style={{ width: "100%" }}><VoiceCore active={false} label="Outfit confirmed" /><h1 className="page-title" style={{ fontSize: 27 }}>{copy.outfit.confirmedTitle}</h1><p className="secondary-copy">{copy.outfit.confirmedBody}</p><div className="confirmed-outfit"><OutfitCanvas outfit={current} wardrobe={wardrobe} /></div></div></div><div style={{ display: "grid", gap: 10 }}><PrimaryButton onClick={onRevise}>See today’s outfit</PrimaryButton><Link href="/wardrobe" className="secondary-button">Back to wardrobe</Link></div></MotionSection>;
 }
 
-function IntentTagSheet({ tag, value, onChange, onClose, onSave, onRemove }: { tag: IntentTag; value: string; onChange: (value: string) => void; onClose: () => void; onSave: () => void; onRemove: () => void }) {
-  return <><button className="sheet-scrim" aria-label="Close intent editor" onClick={onClose} /><section className="bottom-sheet" aria-label="Edit intent tag"><div className="sheet-handle" /><h2>Edit today’s intent</h2><p className="secondary-copy">This changes today only and immediately refreshes the outfit.</p>{tag.kind !== "excluded" && <input className="sheet-input" aria-label="Intent tag" value={value} onChange={(event) => onChange(event.target.value)} />}<div className="sheet-actions"><SecondaryButton onClick={onRemove}>{tag.kind === "excluded" ? "Allow this today" : "Remove tag"}</SecondaryButton>{tag.kind !== "excluded" && <PrimaryButton disabled={!value.trim()} onClick={onSave}>Update outfit</PrimaryButton>}</div></section></>;
+function IntentTagSheet({ tag, value, onChange, onSave, onRemove }: { tag: IntentTag; value: string; onChange: (value: string) => void; onSave: () => void; onRemove: () => void }) {
+  return <><h2>Edit today’s intent</h2><p className="secondary-copy">This changes today only and immediately refreshes the outfit.</p>{tag.kind !== "excluded" && <input className="sheet-input" aria-label="Intent tag" value={value} onChange={(event) => onChange(event.target.value)} />}<div className="sheet-actions"><SecondaryButton onClick={onRemove}>{tag.kind === "excluded" ? "Allow this today" : "Remove tag"}</SecondaryButton>{tag.kind !== "excluded" && <PrimaryButton disabled={!value.trim()} onClick={onSave}>Update outfit</PrimaryButton>}</div></>;
 }
 
 function ErrorState({ onRetry }: { onRetry: () => void }) {

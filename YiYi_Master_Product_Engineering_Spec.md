@@ -1704,7 +1704,9 @@ Tool results must be small, serializable objects. Tool exceptions are transforme
 
 # 10. Weather
 
-Use Open-Meteo through `GET /api/weather`.
+The competition P0 flow calls `GET /api/weather` without coordinates and uses fixed demo weather. It does not request device location permission.
+
+The route can use Open-Meteo when both latitude and longitude are supplied explicitly by a future caller.
 
 Input:
 
@@ -2395,7 +2397,6 @@ AI_MODE=mock
 NEXT_PUBLIC_VOICE_MODE=mock
 NEXT_PUBLIC_SEED_DEMO_WARDROBE=true
 NEXT_PUBLIC_ENABLE_CUTOUT_EDITOR=false
-NEXT_PUBLIC_USE_FIXED_DEMO_WEATHER=true
 
 # Optional production rate limit
 UPSTASH_REDIS_REST_URL=

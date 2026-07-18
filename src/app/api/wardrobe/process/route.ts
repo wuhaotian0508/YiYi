@@ -4,6 +4,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { WardrobeAnalysisSchema, type WardrobeAnalysis } from "@/domain/schemas";
 import { apiError, noStoreJson } from "@/lib/api/responses";
 import { takeRateLimit } from "@/lib/api/rate-limit";
+import { logApiDiagnostic, responseUsage, safeErrorMetadata } from "@/lib/api/diagnostics";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -50,23 +51,55 @@ export async function POST(request: Request) {
     providerForm.append("channels", "rgba");
     providerForm.append("size", "medium");
     providerForm.append("crop", "true");
-    const cutoutResponse = await fetch("https://sdk.photoroom.com/v1/segment", { method: "POST", headers: { "x-api-key": process.env.PHOTOROOM_API_KEY }, body: providerForm, signal: AbortSignal.timeout(30_000) });
-    if (!cutoutResponse.ok) return apiError(requestId, 502, "BACKGROUND_REMOVAL_FAILED", "We couldn’t process this item. Please try again.", cutoutResponse.status >= 500);
-    const removed = Buffer.from(await cutoutResponse.arrayBuffer());
-    const normalized = await sharp(removed).trim().resize(860, 860, { fit: "inside", withoutEnlargement: true }).extend({ top: 82, bottom: 82, left: 82, right: 82, background: { r: 0, g: 0, b: 0, alpha: 0 } }).resize(1024, 1024, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 90, alphaQuality: 100 }).toBuffer();
+    const photoroomStartedAt = Date.now();
+    let cutoutResponse: Response;
+    try {
+      cutoutResponse = await fetch("https://sdk.photoroom.com/v1/segment", { method: "POST", headers: { "x-api-key": process.env.PHOTOROOM_API_KEY }, body: providerForm, signal: AbortSignal.timeout(30_000) });
+    } catch (error) {
+      const metadata = safeErrorMetadata(error);
+      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", ...metadata, durationMs: Date.now() - photoroomStartedAt, errorCode: "BACKGROUND_REMOVAL_FAILED" });
+      return apiError(requestId, 502, "BACKGROUND_REMOVAL_FAILED", "We couldn’t process this item. Please try again.", true);
+    }
+    if (!cutoutResponse.ok) {
+      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt, errorCode: "BACKGROUND_REMOVAL_FAILED", errorType: "ProviderHttpError" });
+      return apiError(requestId, 502, "BACKGROUND_REMOVAL_FAILED", "We couldn’t process this item. Please try again.", cutoutResponse.status >= 500);
+    }
+    let normalized: Buffer;
+    try {
+      const removed = Buffer.from(await cutoutResponse.arrayBuffer());
+      normalized = await sharp(removed).trim().resize(860, 860, { fit: "inside", withoutEnlargement: true }).extend({ top: 82, bottom: 82, left: 82, right: 82, background: { r: 0, g: 0, b: 0, alpha: 0 } }).resize(1024, 1024, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 90, alphaQuality: 100 }).toBuffer();
+    } catch (error) {
+      const metadata = safeErrorMetadata(error);
+      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", ...metadata, httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt, errorCode: "INVALID_BACKGROUND_REMOVAL_OUTPUT" });
+      return apiError(requestId, 502, "INVALID_BACKGROUND_REMOVAL_OUTPUT", "We couldn’t process this item. Please try again.", true);
+    }
+    logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "success", httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt });
     const imageUrl = `data:image/webp;base64,${normalized.toString("base64")}`;
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const model = process.env.OPENAI_ITEM_MODEL ?? "gpt-5.6-terra";
+    const openaiStartedAt = Date.now();
     const result = await openai.responses.parse({
-      model: process.env.OPENAI_ITEM_MODEL ?? "gpt-5.6-terra",
-      store: false,
-      reasoning: { effort: "none" },
-      input: [{ role: "user", content: [
-        { type: "input_text", text: "Analyze this single transparent clothing cutout using only visible evidence. Use the supplied schema, controlled colors, specific accessory categories, unknown when uncertain, and no brand guesses." },
-        { type: "input_image", image_url: imageUrl, detail: "high" },
-      ] }],
-      text: { format: zodTextFormat(WardrobeAnalysisSchema, "wardrobe_analysis") },
+        model,
+        store: false,
+        reasoning: { effort: "none" },
+        input: [{ role: "user", content: [
+          { type: "input_text", text: "Analyze this single transparent clothing cutout using only visible evidence. Use the supplied schema, controlled colors, specific accessory categories, unknown when uncertain, and no brand guesses." },
+          { type: "input_image", image_url: imageUrl, detail: "high" },
+        ] }],
+        text: { format: zodTextFormat(WardrobeAnalysisSchema, "wardrobe_analysis") },
+      }).catch((error: unknown) => {
+      const metadata = safeErrorMetadata(error);
+      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", ...metadata, durationMs: Date.now() - openaiStartedAt, errorCode: "ITEM_ANALYSIS_FAILED" });
+      return null;
     });
-    const analysis = WardrobeAnalysisSchema.parse(result.output_parsed);
+    if (!result) return apiError(requestId, 502, "ITEM_ANALYSIS_FAILED", "We couldn’t understand this item. Please try again.", true);
+    const parsedAnalysis = WardrobeAnalysisSchema.safeParse(result.output_parsed);
+    if (!parsedAnalysis.success) {
+      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", httpStatus: 200, durationMs: Date.now() - openaiStartedAt, errorCode: "INVALID_ITEM_ANALYSIS_OUTPUT", errorType: "InvalidProviderOutput", usage: responseUsage(result) });
+      return apiError(requestId, 502, "INVALID_ITEM_ANALYSIS_OUTPUT", "We couldn’t understand this item. Please try again.", true);
+    }
+    const analysis = parsedAnalysis.data;
+    logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "success", httpStatus: 200, durationMs: Date.now() - openaiStartedAt, usage: responseUsage(result) });
     return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis });
   } catch {
     return apiError(requestId, 500, "PROCESSING_FAILED", "We couldn’t process this item. Please try again.", true);

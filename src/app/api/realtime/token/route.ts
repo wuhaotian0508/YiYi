@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { apiError, noStoreJson } from "@/lib/api/responses";
 import { takeRateLimit } from "@/lib/api/rate-limit";
+import { logApiDiagnostic, safeErrorMetadata } from "@/lib/api/diagnostics";
 
 export const runtime = "nodejs";
 
@@ -13,10 +14,11 @@ export async function POST(request: Request) {
   if (origin && host && new URL(origin).host !== host) return apiError(requestId, 403, "INVALID_ORIGIN", "Request origin is not allowed.");
   if (process.env.NEXT_PUBLIC_VOICE_MODE !== "live") return apiError(requestId, 409, "MOCK_MODE", "Live voice is disabled in this environment.");
   if (!process.env.OPENAI_API_KEY) return apiError(requestId, 503, "NOT_CONFIGURED", "Live voice is not configured.", true);
+  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-mini";
+  const voice = process.env.OPENAI_REALTIME_VOICE ?? "marin";
+  const providerStartedAt = Date.now();
   try {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-mini";
-    const voice = process.env.OPENAI_REALTIME_VOICE ?? "marin";
     const secret = await client.realtime.clientSecrets.create({
       expires_after: { anchor: "created_at", seconds: 120 },
       session: {
@@ -31,8 +33,11 @@ export async function POST(request: Request) {
         tracing: null,
       },
     });
+    logApiDiagnostic({ requestId, route: "/api/realtime/token", provider: "openai-realtime", model, outcome: "success", httpStatus: 200, durationMs: Date.now() - providerStartedAt });
     return noStoreJson({ requestId, value: secret.value, expiresAt: secret.expires_at, model, voice });
-  } catch {
+  } catch (error) {
+    const metadata = safeErrorMetadata(error);
+    logApiDiagnostic({ requestId, route: "/api/realtime/token", provider: "openai-realtime", model, outcome: "error", ...metadata, durationMs: Date.now() - providerStartedAt, errorCode: "TOKEN_PROVIDER_FAILED" });
     return apiError(requestId, 502, "TOKEN_PROVIDER_FAILED", "Could not start live voice right now.", true);
   }
 }

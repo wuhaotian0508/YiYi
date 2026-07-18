@@ -49,4 +49,6 @@ The browser requests an ephemeral secret from `/api/realtime/token`, then connec
 
 All external inputs and AI outputs are Zod-validated. Async work carries request IDs and cancellable rank/weather requests use `AbortController`. Images, base64, audio, secrets, full wardrobe contents, and sensitive freeform content are never logged. Responses API requests use `store: false`.
 
+Provider diagnostics are structured and request-ID correlated. Only route/provider/model, status category, latency, safe error type/code, and aggregate usage totals are logged.
+
 Token, image-processing, and ranking routes have a dependency-free per-instance rate-limit guard. A shared edge limiter can replace it for multi-instance production without changing route contracts.

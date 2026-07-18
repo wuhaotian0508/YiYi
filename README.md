@@ -12,6 +12,8 @@ pnpm dev
 
 Mock mode is the default and does not require provider credentials. Open http://localhost:3000 on a narrow mobile viewport.
 
+The competition build intentionally uses fixed demo weather. `/api/weather` can normalize Open-Meteo data when coordinates are explicitly supplied, but the current Today flow does not request device location.
+
 ## Verification
 
 ```bash
