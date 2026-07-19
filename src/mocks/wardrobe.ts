@@ -106,6 +106,7 @@ export const demoIntent = {
 
 export const demoPreferenceProfile: PreferenceProfile = {
   id: "default",
+  wardrobeDirection: "mixed",
   styleVector: {
     relaxedPolished: -0.25,
     minimalExpressive: -0.45,
@@ -114,14 +115,31 @@ export const demoPreferenceProfile: PreferenceProfile = {
     classicTrendAware: -0.1,
     feminineNeutral: 0.35,
   },
+  styleFeedback: [
+    { lookId: "look-2", sentiment: "like" },
+    { lookId: "look-4", sentiment: "like" },
+    { lookId: "look-1", sentiment: "dislike" },
+  ],
+  styleAnchors: [
+    {
+      id: "demo-relaxed-tailoring",
+      label: "Relaxed tailoring",
+      vector: { relaxedPolished: 0.35, minimalExpressive: -0.45, softCool: 0.15, fittedOversized: 0.25, classicTrendAware: -0.1, feminineNeutral: 0.35 },
+      styleTags: { relaxed: 0.8, clean: 0.75, tailored: 0.7, cool: 0.45 },
+      evidenceCount: 3,
+      confidence: 0.65,
+      updatedAt: now,
+    },
+  ],
   hardAvoids: [
     { key: "category", value: "heels", strength: "hard" },
-    { key: "style", value: "overly formal looks", strength: "hard" },
   ],
   softPreferences: [
     { key: "style", value: "relaxed and clean", strength: "soft" },
     { key: "comfort", value: "comfortable shoes", strength: "soft" },
+    { key: "style", value: "overly formal looks", strength: "soft", polarity: "avoid" },
   ],
+  preferenceNotes: { moreOf: ["relaxed tailoring", "clean layers"], lessOf: ["overly formal"], freeform: "Comfortable enough for walking." },
   preferredMetals: ["silver"],
   comfortWeight: 0.8,
   formalityBias: -0.2,
@@ -129,5 +147,6 @@ export const demoPreferenceProfile: PreferenceProfile = {
     { phrase: "Comfort over formality", source: "onboarding", createdAt: now },
     { phrase: "Usually prefer silver-tone jewelry", source: "onboarding", createdAt: now },
   ],
+  provenance: "demo",
   updatedAt: now,
 };

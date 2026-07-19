@@ -10,3 +10,5 @@ test-results/
 .DS_Store
 public/generated/
 tmp/
+.vercel
+.env*

@@ -9,6 +9,7 @@ export type ExperienceMode = "demo" | "personal";
 
 const experienceModeKey = "experienceMode";
 const demoWardrobeSeededKey = "demoWardrobeSeeded";
+const demoItemIdsKey = "demoItemIds";
 
 export class YiYiDatabase extends Dexie {
   wardrobeItems!: EntityTable<WardrobeItem, "id">;
@@ -30,6 +31,69 @@ export class YiYiDatabase extends Dexie {
       appSettings: "&key",
       processingJobs: "&id, status, createdAt",
     });
+    this.version(2).stores({
+      wardrobeItems: "&id, category, availability, lastWornAt, createdAt",
+      itemImages: "&itemId",
+      preferenceProfiles: "&id",
+      dailySessions: "&id, dateKey, status",
+      outfitVersions: "&id, sessionId, parentVersionId, createdAt",
+      appSettings: "&key",
+      processingJobs: "&id, status, createdAt",
+    }).upgrade(async (transaction) => {
+      await transaction.table("preferenceProfiles").toCollection().modify((profile) => {
+        profile.wardrobeDirection ??= "neutral";
+        profile.styleFeedback ??= [];
+        profile.preferenceNotes ??= { moreOf: [], lessOf: [], freeform: "" };
+      });
+      await transaction.table("dailySessions").toCollection().modify((session) => {
+        session.alternativeIds ??= [];
+      });
+    });
+    this.version(3).stores({
+      wardrobeItems: "&id, category, availability, lastWornAt, createdAt",
+      itemImages: "&itemId",
+      preferenceProfiles: "&id",
+      dailySessions: "&id, dateKey, status",
+      outfitVersions: "&id, sessionId, parentVersionId, createdAt",
+      appSettings: "&key",
+      processingJobs: "&id, status, createdAt",
+    }).upgrade(async (transaction) => {
+      await transaction.table("dailySessions").toCollection().modify((session) => {
+        session.historyVersionIds ??= [];
+      });
+    });
+    this.version(4).stores({
+      wardrobeItems: "&id, category, availability, lastWornAt, createdAt",
+      itemImages: "&itemId",
+      preferenceProfiles: "&id",
+      dailySessions: "&id, dateKey, status",
+      outfitVersions: "&id, sessionId, parentVersionId, createdAt",
+      appSettings: "&key",
+      processingJobs: "&id, status, createdAt",
+    }).upgrade(async (transaction) => {
+      await transaction.table("preferenceProfiles").toCollection().modify((profile) => {
+        profile.styleAnchors ??= [];
+        profile.provenance ??= "personal";
+      });
+      await transaction.table("dailySessions").toCollection().modify((session) => {
+        session.shownOutfitIds ??= session.mainRecommendationId ? [session.mainRecommendationId] : [];
+        session.operationGeneration ??= 0;
+      });
+    });
+    this.version(5).stores({
+      wardrobeItems: "&id, category, availability, lastWornAt, createdAt",
+      itemImages: "&itemId",
+      preferenceProfiles: "&id",
+      dailySessions: "&id, dateKey, status",
+      outfitVersions: "&id, sessionId, parentVersionId, createdAt",
+      appSettings: "&key",
+      processingJobs: "&id, status, createdAt",
+    }).upgrade(async (transaction) => {
+      await transaction.table("preferenceProfiles").toCollection().modify((profile) => {
+        const rules = [...(profile.hardAvoids ?? []), ...(profile.softPreferences ?? [])] as Array<{ strength?: string; polarity?: string }>;
+        for (const rule of rules) if (rule.strength === "hard" && rule.polarity === "prefer") rule.strength = "soft";
+      });
+    });
   }
 }
 
@@ -40,9 +104,27 @@ export function shouldSeedDemoWardrobe(input: { mode: ExperienceMode | null; alr
 }
 
 export async function setExperienceMode(mode: ExperienceMode, resetDemoSeed = false) {
-  await db.transaction("rw", db.appSettings, async () => {
+  await db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
     await db.appSettings.put({ key: experienceModeKey, value: mode });
-    if (mode === "personal") await db.appSettings.put({ key: demoWardrobeSeededKey, value: true });
+    if (mode === "personal") {
+      const storedIds = (await db.appSettings.get(demoItemIdsKey))?.value;
+      let parsedIds: unknown = [];
+      if (typeof storedIds === "string") {
+        try { parsedIds = JSON.parse(storedIds) as unknown; } catch { parsedIds = []; }
+      }
+      const demoIds = Array.isArray(parsedIds) ? parsedIds.filter((value): value is string => typeof value === "string") : [];
+      const taggedDemoIds = (await db.wardrobeItems.filter((item) => item.dataProvenance === "demo").toArray()).map((item) => item.id);
+      const ids = [...new Set([...demoIds, ...taggedDemoIds])];
+      if (ids.length) {
+        await db.wardrobeItems.bulkDelete(ids);
+        await db.itemImages.bulkDelete(ids);
+      }
+      const profile = await db.preferenceProfiles.get("default");
+      if (profile?.provenance === "demo") await db.preferenceProfiles.delete("default");
+      await db.dailySessions.clear();
+      await db.outfitVersions.clear();
+      await db.appSettings.put({ key: demoWardrobeSeededKey, value: true });
+    }
     else if (resetDemoSeed) await db.appSettings.put({ key: demoWardrobeSeededKey, value: false });
   });
 }
@@ -67,9 +149,11 @@ export async function seedWardrobe(items: WardrobeItem[], options: { explicit?: 
       return;
     }
     if (!shouldSeedDemoWardrobe({ mode, alreadySeeded, itemCount, environmentEnabled })) return;
-    await db.wardrobeItems.bulkPut(items);
+    const demoItems = items.map((item) => ({ ...item, dataProvenance: "demo" as const, featureProvenance: { ...item.featureProvenance, source: "demo" as const } }));
+    await db.wardrobeItems.bulkPut(demoItems);
     await db.appSettings.put({ key: experienceModeKey, value: "demo" });
     await db.appSettings.put({ key: demoWardrobeSeededKey, value: true });
+    await db.appSettings.put({ key: demoItemIdsKey, value: JSON.stringify(demoItems.map((item) => item.id)) });
   });
 }
 
@@ -86,4 +170,15 @@ export async function requestPersistentStorage() {
   const persisted = (await navigator.storage.persist?.()) ?? false;
   const estimate = await navigator.storage.estimate();
   return { persisted, usage: estimate.usage ?? 0, quota: estimate.quota ?? 0 };
+}
+
+const soundEnabledKey = "soundEnabled";
+
+export async function getSoundEnabled() {
+  const value = (await db.appSettings.get(soundEnabledKey))?.value;
+  return value === undefined ? true : value === true;
+}
+
+export async function setSoundEnabled(enabled: boolean) {
+  await db.appSettings.put({ key: soundEnabledKey, value: enabled });
 }

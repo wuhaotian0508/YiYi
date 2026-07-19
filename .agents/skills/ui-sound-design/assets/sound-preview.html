@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UI Sound Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --background: hsl(0 0% 3.9%);
+    --foreground: hsl(0 0% 98%);
+    --card: hsl(0 0% 9%);
+    --card-foreground: hsl(0 0% 98%);
+    --muted-foreground: hsl(240 5% 64.9%);
+    --border: hsl(0 0% 14.9%);
+    --ring: hsl(0 0% 60%);
+    --playing: hsl(0 0% 70%);
+    --playing-glow: hsl(0 0% 100% / 0.07);
+    --radius: 0.375rem;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--background);
+    color: var(--foreground);
+    min-height: 100vh;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .mono {
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+  }
+
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+
+  .title {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+
+  .badge {
+    font-size: 0.6875rem;
+    color: var(--muted-foreground);
+    opacity: 0.6;
+  }
+
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4375rem 0.875rem;
+    font-family: inherit;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--foreground);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+  }
+
+  .btn-secondary:hover {
+    background: hsl(0 0% 12%);
+    border-color: hsl(0 0% 25%);
+  }
+
+  .btn-secondary:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  .btn-secondary svg {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin-bottom: 1.5rem;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.75rem;
+    width: 100%;
+  }
+
+  .card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+    color: var(--card-foreground);
+    font-family: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .card:hover {
+    background: hsl(0 0% 11%);
+    border-color: hsl(0 0% 20%);
+  }
+
+  .card:active {
+    transform: scale(0.98);
+    transition-duration: 0.05s;
+  }
+
+  .card:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  @keyframes playing-pulse {
+    0%, 100% { box-shadow: 0 0 0 1px var(--playing), 0 0 20px var(--playing-glow), inset 0 0 12px var(--playing-glow); }
+    50% { box-shadow: 0 0 0 1px var(--playing), 0 0 30px hsl(0 0% 100% / 0.1), inset 0 0 20px hsl(0 0% 100% / 0.06); }
+  }
+
+  .card.playing {
+    border-color: var(--playing);
+    background: hsl(0 0% 11%);
+    animation: playing-pulse 0.6s ease-in-out;
+  }
+
+  .card-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
+  }
+
+  .label {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: -0.01em;
+  }
+
+  .meta {
+    font-size: 0.6875rem;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+  }
+
+  .dl {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border-radius: calc(var(--radius) - 2px);
+    border: 1px solid var(--border);
+    color: var(--muted-foreground);
+    background: transparent;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+  }
+
+  .dl:hover {
+    color: var(--foreground);
+    border-color: hsl(0 0% 25%);
+    background: hsl(0 0% 12%);
+  }
+
+  .dl svg {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+  }
+
+  .footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.6875rem;
+    color: var(--muted-foreground);
+    opacity: 0.5;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <header class="header">
+    <div class="header-left">
+      <h1 class="title">UI Sound Preview</h1>
+      <span class="badge mono" id="sound-count"></span>
+    </div>
+    <button class="btn-secondary" onclick="downloadAll()" title="Download all sounds as WAV files">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download All
+    </button>
+  </header>
+
+  <div class="divider"></div>
+
+  <div class="grid" role="group" aria-label="Sound preview buttons">
+    <!-- Agent: Add or remove buttons to match generated sounds. Each button needs a matching entry in the durations map.
+         Button pattern:
+         <button class="card" onclick="playSound('sound_name', this)">
+           <div class="card-content"><span class="label">Sound Name</span><span class="meta mono">50ms · sine</span></div>
+           <span class="dl" onclick="event.stopPropagation(); downloadSound('sound_name')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+         </button>
+    -->
+    <button class="card" onclick="playSound('click', this)"><div class="card-content"><span class="label">Click</span><span class="meta mono">50ms · noise</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('click')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('toggle_on', this)"><div class="card-content"><span class="label">Toggle On</span><span class="meta mono">120ms · sine</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('toggle_on')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('toggle_off', this)"><div class="card-content"><span class="label">Toggle Off</span><span class="meta mono">120ms · sine</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('toggle_off')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('hover', this)"><div class="card-content"><span class="label">Hover</span><span class="meta mono">60ms · sine</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('hover')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('success', this)"><div class="card-content"><span class="label">Success</span><span class="meta mono">320ms · sine</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('success')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('error', this)"><div class="card-content"><span class="label">Error</span><span class="meta mono">250ms · saw</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('error')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('warning', this)"><div class="card-content"><span class="label">Warning</span><span class="meta mono">240ms · tri</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('warning')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('notification', this)"><div class="card-content"><span class="label">Notification</span><span class="meta mono">400ms · FM</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('notification')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('whoosh', this)"><div class="card-content"><span class="label">Whoosh</span><span class="meta mono">200ms · noise</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('whoosh')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+    <button class="card" onclick="playSound('pop', this)"><div class="card-content"><span class="label">Pop</span><span class="meta mono">60ms · sine</span></div><span class="dl" onclick="event.stopPropagation(); downloadSound('pop')" title="Download WAV" aria-label="Download WAV"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>
+  </div>
+
+  <footer class="footer">
+    <span class="mono">Web Audio API</span>
+    <span>·</span>
+    <span class="mono">44.1kHz WAV</span>
+  </footer>
+
+</div>
+
+<script>
+// --- AudioContext singleton ---
+let audioCtx = null;
+function getAudioContext() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+// --- Visual feedback ---
+function flash(btn, name) {
+  btn.classList.add('playing');
+  const dur = (durations[name] || 0.3) * 1000;
+  setTimeout(() => btn.classList.remove('playing'), Math.max(dur, 200));
+}
+
+// --- Duration map (seconds) ---
+// Agent: Update durations map when adding/removing sounds
+const durations = {
+  click: 0.05, toggle_on: 0.13, toggle_off: 0.13, hover: 0.07,
+  success: 0.33, error: 0.26, warning: 0.25, notification: 0.41,
+  whoosh: 0.2, pop: 0.07
+};
+
+// --- Sound registry ---
+// Agent: Replace or extend these functions with generated sounds. Use (ctx, dest) parameters for download support.
+const sounds = {
+  click(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.05, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2000; f.Q.value = 2;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.3, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+    src.connect(f); f.connect(g); g.connect(dest); src.start(now);
+  },
+  toggle_on(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(500, now); o.frequency.exponentialRampToValueAtTime(700, now + 0.12);
+    g.gain.setValueAtTime(0.25, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    o.connect(g); g.connect(dest); o.start(now); o.stop(now + 0.13);
+  },
+  toggle_off(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(700, now); o.frequency.exponentialRampToValueAtTime(500, now + 0.12);
+    g.gain.setValueAtTime(0.25, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    o.connect(g); g.connect(dest); o.start(now); o.stop(now + 0.13);
+  },
+  hover(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = 2400;
+    g.gain.setValueAtTime(0.001, now); g.gain.exponentialRampToValueAtTime(0.08, now + 0.01); g.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    o.connect(g); g.connect(dest); o.start(now); o.stop(now + 0.07);
+  },
+  success(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    [0, 1].forEach(i => {
+      const o = ctx.createOscillator(), g = ctx.createGain(), t = now + i * 0.2;
+      o.type = 'sine'; o.frequency.value = 523 * Math.pow(1.25, i);
+      g.gain.setValueAtTime(0.3, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      o.connect(g); g.connect(dest); o.start(t); o.stop(t + 0.13);
+    });
+  },
+  error(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(400, now); o.frequency.exponentialRampToValueAtTime(200, now + 0.25);
+    f.type = 'lowpass'; f.frequency.value = 1500;
+    g.gain.setValueAtTime(0.25, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    o.connect(f); f.connect(g); g.connect(dest); o.start(now); o.stop(now + 0.26);
+  },
+  warning(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    [0, 1].forEach(i => {
+      const o = ctx.createOscillator(), g = ctx.createGain(), t = now + i * 0.16;
+      o.type = 'triangle'; o.frequency.value = 600;
+      g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+      o.connect(g); g.connect(dest); o.start(t); o.stop(t + 0.09);
+    });
+  },
+  notification(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    const mod = ctx.createOscillator(), mg = ctx.createGain();
+    mod.frequency.value = 880 * 1.4; mg.gain.setValueAtTime(1500, now); mg.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+    const car = ctx.createOscillator(), cg = ctx.createGain();
+    car.frequency.value = 880; cg.gain.setValueAtTime(0.25, now); cg.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    mod.connect(mg); mg.connect(car.frequency); car.connect(cg); cg.connect(dest);
+    mod.start(now); car.start(now); mod.stop(now + 0.41); car.stop(now + 0.41);
+  },
+  whoosh(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.2, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1;
+    f.frequency.setValueAtTime(500, now); f.frequency.exponentialRampToValueAtTime(4000, now + 0.2);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.001, now); g.gain.exponentialRampToValueAtTime(0.2, now + 0.06); g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    src.connect(f); f.connect(g); g.connect(dest); src.start(now);
+  },
+  pop(ctx, dest) {
+    ctx = ctx || getAudioContext(); dest = dest || ctx.destination;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(1200, now); o.frequency.exponentialRampToValueAtTime(300, now + 0.06);
+    g.gain.setValueAtTime(0.3, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    o.connect(g); g.connect(dest); o.start(now); o.stop(now + 0.07);
+  }
+};
+
+function playSound(name, btn) {
+  if (sounds[name]) { sounds[name](); flash(btn, name); }
+}
+
+// --- WAV encoder ---
+function writeString(view, offset, str) {
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+
+function encodeWAV(audioBuffer) {
+  const sampleRate = audioBuffer.sampleRate;
+  const samples = audioBuffer.getChannelData(0);
+  const dataLength = samples.length * 2;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+// --- Download ---
+async function downloadSound(name) {
+  if (!sounds[name]) return;
+  const duration = (durations[name] || 0.5) + 0.05;
+  const sampleRate = 44100;
+  const offlineCtx = new OfflineAudioContext(1, Math.ceil(sampleRate * duration), sampleRate);
+  sounds[name](offlineCtx, offlineCtx.destination);
+  const rendered = await offlineCtx.startRendering();
+  const blob = encodeWAV(rendered);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name + '.wav';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// --- Download All ---
+async function downloadAll() {
+  const names = Object.keys(sounds);
+  for (const name of names) {
+    await downloadSound(name);
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
+
+// --- Auto-update sound count badge ---
+document.getElementById('sound-count').textContent = Object.keys(sounds).length + ' sounds';
+</script>
+</body>
+</html>

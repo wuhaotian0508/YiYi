@@ -3,6 +3,7 @@ import { PreferenceProfileSchema, type PreferenceProfile } from "@/domain/schema
 export function createNeutralPreferenceProfile(now = Date.now()): PreferenceProfile {
   return PreferenceProfileSchema.parse({
     id: "default",
+    wardrobeDirection: "neutral",
     styleVector: {
       relaxedPolished: 0,
       minimalExpressive: 0,
@@ -11,12 +12,16 @@ export function createNeutralPreferenceProfile(now = Date.now()): PreferenceProf
       classicTrendAware: 0,
       feminineNeutral: 0,
     },
+    styleFeedback: [],
+    styleAnchors: [],
     hardAvoids: [],
     softPreferences: [],
+    preferenceNotes: { moreOf: [], lessOf: [], freeform: "" },
     preferredMetals: [],
     comfortWeight: 0.5,
     formalityBias: 0,
     evidence: [],
+    provenance: "personal",
     updatedAt: now,
   });
 }

@@ -16,11 +16,10 @@ import { clothingCategories, colorHex, colorIds, colorLabels, commonMaterials } 
 import { db, setExperienceMode } from "@/lib/storage/db";
 import { demoWardrobe } from "@/mocks/wardrobe";
 import { calmSpring } from "@/lib/motion/tokens";
+import { canvasToBlob, encodeCanvasWithinUploadLimit, MAX_FILE_BYTES, MAX_UPLOAD_BYTES } from "@/lib/images/prepare-upload";
 
 type Step = "choose" | "processing" | "review" | "error";
 type Sheet = "color" | "material" | "category" | null;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const MAX_UPLOAD_BYTES = 4_000_000;
 
 const ProcessResponseSchema = z.object({
   requestId: z.string().uuid(),
@@ -31,14 +30,6 @@ const ProcessResponseSchema = z.object({
 const ErrorResponseSchema = z.object({
   error: z.object({ message: z.string(), retryable: z.boolean() }),
 }).passthrough();
-
-function canvasBlob(canvas: HTMLCanvasElement, type: string, quality: number) {
-  return new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
-    if (blob) { resolve(blob); return; }
-    if (type !== "image/png") { canvas.toBlob((fallback) => fallback ? resolve(fallback) : reject(new Error("Image conversion failed")), "image/png"); return; }
-    reject(new Error("Image conversion failed"));
-  }, type, quality));
-}
 
 async function preprocessImage(file: File) {
   if (file.size > MAX_FILE_BYTES) throw new Error("Choose an image smaller than 20 MB.");
@@ -52,9 +43,7 @@ async function preprocessImage(file: File) {
     if (!context) throw new Error("Image processing is unavailable.");
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-    const normalized = await canvasBlob(canvas, "image/webp", .86);
-    if (normalized.size > MAX_UPLOAD_BYTES) return canvasBlob(canvas, "image/webp", .7);
-    return normalized;
+    return encodeCanvasWithinUploadLimit(canvas);
   } catch (error) {
     if (file.size <= MAX_UPLOAD_BYTES) return file;
     throw error instanceof Error ? error : new Error("This image could not be prepared.");
@@ -94,7 +83,7 @@ async function makeThumbnail(blob: Blob) {
   if (!context) { loaded.revoke(); throw new Error("Thumbnail generation is unavailable."); }
   context.drawImage(loaded.image, 0, 0, canvas.width, canvas.height);
   loaded.revoke();
-  return canvasBlob(canvas, "image/webp", .78);
+  return canvasToBlob(canvas, "image/webp", .78);
 }
 
 export default function AddWardrobePage() {
@@ -172,6 +161,7 @@ export default function AddWardrobePage() {
         ...analysis,
         id,
         schemaVersion: 1,
+        dataProvenance: "personal",
         availability: "available",
         createdAt: now,
         updatedAt: now,
@@ -206,10 +196,24 @@ export default function AddWardrobePage() {
 
   function updateAnalysis(patch: Partial<WardrobeAnalysis>) {
     if (!analysis) return;
+    const provenanceKey: Partial<Record<keyof WardrobeAnalysis, string>> = {
+      category: "category",
+      primaryColor: "colors",
+      secondaryColors: "colors",
+      materials: "materials",
+      pattern: "pattern",
+      fit: "fit",
+      styleTags: "style",
+      formality: "formality",
+      warmth: "warmth",
+      comfort: "comfort",
+    };
+    const editedFeatures = [...new Set(Object.keys(patch).map((key) => provenanceKey[key as keyof WardrobeAnalysis]).filter((key): key is string => Boolean(key)))];
     setAnalysis(WardrobeAnalysisSchema.parse({
       ...analysis,
       ...patch,
-      userEditedFields: [...new Set([...analysis.userEditedFields, ...Object.keys(patch)])],
+      featureProvenance: { ...analysis.featureProvenance, ...Object.fromEntries(editedFeatures.map((key) => [key, "user"])) },
+      userEditedFields: [...new Set([...analysis.userEditedFields, ...editedFeatures])],
     }));
   }
 
@@ -226,7 +230,15 @@ function Choose({ onFile }: { onFile: (file?: File) => void }) {
 }
 
 function Processing() {
-  return <section className="add-flow"><div className="center-stage"><div style={{ width: "100%" }}><p className="secondary-copy" style={{ marginBottom: 42 }}>Processing 1 of 1</p><div className="processing-stack"><div><VoiceCoreSmall active /><p className="body-copy">Removing background…</p></div><div><VoiceCoreSmall active /><p className="body-copy">Understanding the item…</p></div></div><div className="soft-card" style={{ marginTop: 44, textAlign: "left" }}><div style={{ display: "flex", justifyContent: "space-between" }}><span>1&nbsp;&nbsp; Clothing item</span><span className="secondary-copy">Processing</span></div></div></div></div></section>;
+  const reduceMotion = useReducedMotion();
+  const [progress, setProgress] = useState(reduceMotion ? 2 : 0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    const understand = window.setTimeout(() => setProgress(1), 680);
+    const settle = window.setTimeout(() => setProgress(2), 1380);
+    return () => { window.clearTimeout(understand); window.clearTimeout(settle); };
+  }, [reduceMotion]);
+  return <section className="add-flow"><div className="center-stage"><div className="processing-narrative"><p className="secondary-copy">Processing 1 of 1</p><div className="processing-focus"><VoiceCoreSmall active={progress < 2} /><AnimatePresence mode="wait"><motion.div key={progress} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}><p className="body-copy">{progress === 0 ? "Removing background…" : progress === 1 ? "Understanding the item…" : "Preparing your review…"}</p><span>{progress === 0 ? "Separating the garment" : progress === 1 ? "Reading category, color, and material" : "Keeping every field editable"}</span></motion.div></AnimatePresence></div><div className="processing-steps"><span className={progress >= 1 ? "complete" : "active"}>{progress >= 1 ? <Check size={14} /> : "1"} Cutout</span><i /><span className={progress >= 2 ? "complete" : progress === 1 ? "active" : ""}>{progress >= 2 ? <Check size={14} /> : "2"} Details</span></div></div></div></section>;
 }
 
 function ProcessingError({ message, onRetry }: { message: string; onRetry: () => void }) {
@@ -236,7 +248,12 @@ function ProcessingError({ message, onRetry }: { message: string; onRetry: () =>
 function VoiceCoreSmall({ active = false }: { active?: boolean }) { return <div className={`processing-core ${active ? "active" : ""}`}><YiYiMark size={47} /></div>; }
 
 function Review({ item, preview, onSheet, onSave, saving }: { item: WardrobeItem; preview: string | null; onSheet: (sheet: Sheet) => void; onSave: () => void; saving: boolean }) {
-  return <section className="add-flow"><div className="review-preview">{preview ? <Image unoptimized src={preview} alt="Processed clothing item" width={320} height={260} style={{ maxHeight: 260, maxWidth: "90%", objectFit: "contain", filter: "drop-shadow(0 10px 10px rgb(0 0 0 / .12))" }} /> : <div style={{ transform: "scale(2)" }}><Garment item={item} /></div>}</div><h2 className="review-name">{item.subtype}</h2><div><button className="attribute-row" onClick={() => onSheet("category")}><span>Category</span><span>{categoryLabel(item.category)} <ChevronRight size={15} /></span></button><button className="attribute-row" onClick={() => onSheet("color")}><span>Color</span><span style={{ display: "flex", alignItems: "center", gap: 7 }}>{colorLabels[item.primaryColor]} <i style={{ width: 12, height: 12, borderRadius: "50%", background: colorHex[item.primaryColor] }} /><ChevronRight size={15} /></span></button><button className="attribute-row" onClick={() => onSheet("material")}><span>Material</span><span>{item.materials[0]} <ChevronRight size={15} /></span></button></div><p className="ready-copy"><Check size={15} /> Ready to add</p><div style={{ marginTop: "auto" }}><PrimaryButton disabled={saving} onClick={onSave}>{saving ? "Saving…" : "Add to wardrobe"}</PrimaryButton></div></section>;
+  const rows = [
+    <button key="category" className="attribute-row" onClick={() => onSheet("category")}><span>Category</span><span>{categoryLabel(item.category)} <ChevronRight size={15} /></span></button>,
+    <button key="color" className="attribute-row" onClick={() => onSheet("color")}><span>Color</span><span style={{ display: "flex", alignItems: "center", gap: 7 }}>{colorLabels[item.primaryColor]} <i style={{ width: 12, height: 12, borderRadius: "50%", background: colorHex[item.primaryColor] }} /><ChevronRight size={15} /></span></button>,
+    <button key="material" className="attribute-row" onClick={() => onSheet("material")}><span>Material</span><span>{item.materials[0]} <ChevronRight size={15} /></span></button>,
+  ];
+  return <section className="add-flow"><motion.div className="review-preview" initial={{ opacity: 0, scale: .96 }} animate={{ opacity: 1, scale: 1 }} transition={calmSpring}>{preview ? <Image unoptimized fill sizes="(max-width: 430px) 90vw, 390px" src={preview} alt="Processed clothing item" style={{ objectFit: "contain", padding: "12px 5%", filter: "drop-shadow(0 10px 10px rgb(0 0 0 / .12))" }} /> : <div style={{ transform: "scale(2)" }}><Garment item={item} /></div>}</motion.div><motion.h2 className="review-name" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .12 }}>{item.subtype}</motion.h2><div>{rows.map((row, index) => <motion.div key={index} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .16 + index * .055, duration: .24 }}>{row}</motion.div>)}</div><motion.p className="ready-copy" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .35 }}><Check size={15} /> Ready to add</motion.p><motion.div style={{ marginTop: "auto" }} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .4 }}><PrimaryButton disabled={saving} onClick={onSave}>{saving ? "Saving…" : "Add to wardrobe"}</PrimaryButton></motion.div></section>;
 }
 
 function categoryLabel(value: WardrobeItem["category"]) { return value.replaceAll("_", " ").replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()); }

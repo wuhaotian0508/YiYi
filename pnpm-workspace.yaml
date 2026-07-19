@@ -1,6 +1,8 @@
 allowBuilds:
   sharp: true
   unrs-resolver: true
+overrides:
+  postcss: 8.5.19
 minimumReleaseAgeExclude:
   - '@tailwindcss/node@4.3.3'
   - '@tailwindcss/oxide-android-arm64@4.3.3'

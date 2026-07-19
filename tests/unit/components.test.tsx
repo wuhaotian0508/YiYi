@@ -16,7 +16,7 @@ describe("UI primitives", () => {
 
   it("renders outfit pieces with accessible focus labels", () => {
     const outfit = generateCandidates(demoWardrobe, demoIntent)[0];
-    render(<OutfitCanvas outfit={outfit} wardrobe={demoWardrobe} />);
+    render(<OutfitCanvas outfit={outfit} wardrobe={demoWardrobe} onSelect={() => undefined} />);
     expect(screen.getByLabelText("Recommended outfit")).toBeInTheDocument();
     expect(screen.getAllByRole("button").length).toBeGreaterThanOrEqual(4);
   });

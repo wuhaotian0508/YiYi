@@ -1,0 +1,11 @@
+{
+  "version": "constraint-search-v3",
+  "scenarios": [
+    { "id": "rainy-commute", "operation": "initial", "invariants": ["rain_safe", "walking_safe", "legal_structure"] },
+    { "id": "required-statement-piece", "operation": "initial", "invariants": ["required_present", "no_post_shortlist_filter"] },
+    { "id": "targeted-bag", "operation": "targeted_revision", "invariants": ["only_target_changes", "excluded_absent"] },
+    { "id": "warmer-keep-shoes", "operation": "global_revision", "invariants": ["preserved_shoes", "structured_delta_applied"] },
+    { "id": "one-piece-transition", "operation": "targeted_revision", "invariants": ["atomic_structure", "legal_structure"] },
+    { "id": "random-session-diversity", "operation": "random_new_outfit", "invariants": ["current_excluded", "unseen_preferred", "perceptual_distance"] }
+  ]
+}

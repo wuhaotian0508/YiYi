@@ -38,6 +38,8 @@
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.5",
     "eslint-config-next": "16.2.10",
+    "fake-indexeddb": "6.2.5",
+    "fast-check": "4.3.0",
     "jsdom": "29.1.1",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",

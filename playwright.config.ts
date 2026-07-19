@@ -11,7 +11,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "pnpm dev",
+    command: "AI_MODE=mock NEXT_PUBLIC_VOICE_MODE=mock NEXT_PUBLIC_SEED_DEMO_WARDROBE=true pnpm dev",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
   },

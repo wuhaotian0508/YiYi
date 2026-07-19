@@ -12,6 +12,10 @@
 
 ---
 
+> **Current product decision — 2026-07-17:** This file preserves the original frozen planning baseline. The repository owner subsequently superseded its exposed-alternatives and fixed-count calibration rules. The current implementation and the root contracts (`PRODUCT_SPEC.md`, `ARCHITECTURE.md`, `DATA_MODEL.md`, `API_CONTRACTS.md`, and `TEST_PLAN.md`) display exactly one current recommendation, keep candidate pools request-scoped, use real displayed-state history for Undo, and allow flexible like/dislike/skip calibration. Those decisions take precedence wherever this historical baseline differs.
+
+---
+
 ## 0. How Codex must use this document
 
 This is the main source of truth for the first competition build.

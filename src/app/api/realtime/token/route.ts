@@ -1,13 +1,14 @@
 import OpenAI from "openai";
 import { apiError, noStoreJson } from "@/lib/api/responses";
-import { takeRateLimit } from "@/lib/api/rate-limit";
+import { providerRoutesAllowed, takeRateLimit } from "@/lib/api/rate-limit";
 import { logApiDiagnostic, safeErrorMetadata } from "@/lib/api/diagnostics";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
-  const rate = takeRateLimit(request, "realtime-token", 10);
+  if (!providerRoutesAllowed()) return apiError(requestId, 503, "PUBLIC_PROTECTION_REQUIRED", "Live voice is not available until production rate protection is configured.", true);
+  const rate = await takeRateLimit(request, "realtime-token", 10);
   if (!rate.allowed) return apiError(requestId, 429, "RATE_LIMITED", `Try again in ${rate.retryAfterSeconds} seconds.`, true);
   const origin = request.headers.get("origin");
   const host = request.headers.get("host");
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
         model,
         output_modalities: ["audio"],
         audio: {
-          input: { noise_reduction: { type: "near_field" }, turn_detection: { type: "semantic_vad", eagerness: "medium", create_response: true, interrupt_response: true } },
+          input: { noise_reduction: { type: "near_field" }, turn_detection: { type: "semantic_vad", eagerness: "low", create_response: true, interrupt_response: true } },
           output: { voice },
         },
         max_output_tokens: 220,

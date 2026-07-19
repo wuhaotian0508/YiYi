@@ -81,5 +81,20 @@ export async function renderCandidateBoard(outfit: Outfit, wardrobe: WardrobeIte
   } finally {
     sprite.revoke?.();
   }
-  return canvas.toDataURL("image/webp", 0.78);
+  const attempts = [0.74, 0.62, 0.5];
+  for (const quality of attempts) {
+    const dataUrl = canvas.toDataURL("image/webp", quality);
+    const bytes = Math.ceil((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75);
+    if (bytes <= 240_000) return { dataUrl, bytes, width: canvas.width, height: canvas.height };
+  }
+  const compact = document.createElement("canvas");
+  compact.width = 384;
+  compact.height = 480;
+  const compactContext = compact.getContext("2d");
+  if (!compactContext) throw new Error("BOARD_TOO_LARGE");
+  compactContext.drawImage(canvas, 0, 0, compact.width, compact.height);
+  const dataUrl = compact.toDataURL("image/webp", 0.52);
+  const bytes = Math.ceil((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75);
+  if (bytes > 240_000) throw new Error("BOARD_TOO_LARGE");
+  return { dataUrl, bytes, width: compact.width, height: compact.height };
 }

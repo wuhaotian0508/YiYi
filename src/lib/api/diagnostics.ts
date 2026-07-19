@@ -8,7 +8,16 @@ export type ApiDiagnostic = {
   durationMs: number;
   errorCode?: string;
   errorType?: string;
+  providerErrorCode?: string;
+  providerRequestId?: string;
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+  candidateCount?: number;
+  boardBytes?: number;
+  boardWidth?: number;
+  boardHeight?: number;
+  imageMime?: "image/webp" | "image/png" | "mixed";
+  providerStage?: string;
+  schemaName?: string;
 };
 
 function statusCategory(status: number | undefined) {
@@ -17,8 +26,14 @@ function statusCategory(status: number | undefined) {
 
 export function safeErrorMetadata(error: unknown) {
   if (error instanceof Error) {
-    const record = error as Error & { status?: unknown };
-    return { errorType: error.name || "Error", httpStatus: typeof record.status === "number" ? record.status : undefined };
+    const record = error as Error & { status?: unknown; code?: unknown; type?: unknown; request_id?: unknown; requestId?: unknown };
+    const safeIdentifier = (value: unknown, max = 100) => typeof value === "string" && value.length <= max && /^[a-zA-Z0-9_.:-]+$/.test(value) ? value : undefined;
+    return {
+      errorType: safeIdentifier(record.type) ?? safeIdentifier(error.name) ?? "Error",
+      httpStatus: typeof record.status === "number" ? record.status : undefined,
+      providerErrorCode: safeIdentifier(record.code),
+      providerRequestId: safeIdentifier(record.request_id ?? record.requestId),
+    };
   }
   return { errorType: "UnknownError", httpStatus: undefined };
 }
@@ -34,6 +49,12 @@ export function responseUsage(response: unknown): ApiDiagnostic["usage"] {
   return inputTokens === undefined && outputTokens === undefined && totalTokens === undefined ? undefined : { inputTokens, outputTokens, totalTokens };
 }
 
+export function responseRequestId(response: unknown) {
+  if (!response || typeof response !== "object") return undefined;
+  const value = (response as { _request_id?: unknown; request_id?: unknown })._request_id ?? (response as { request_id?: unknown }).request_id;
+  return typeof value === "string" && value.length <= 100 && /^[a-zA-Z0-9_.:-]+$/.test(value) ? value : undefined;
+}
+
 export function logApiDiagnostic(diagnostic: ApiDiagnostic) {
   const payload = {
     event: "yiyi_api_provider",
@@ -47,7 +68,16 @@ export function logApiDiagnostic(diagnostic: ApiDiagnostic) {
     durationMs: Math.max(0, Math.round(diagnostic.durationMs)),
     errorCode: diagnostic.errorCode,
     errorType: diagnostic.errorType,
+    providerErrorCode: diagnostic.providerErrorCode,
+    providerRequestId: diagnostic.providerRequestId,
     usage: diagnostic.usage,
+    candidateCount: diagnostic.candidateCount,
+    boardBytes: diagnostic.boardBytes,
+    boardWidth: diagnostic.boardWidth,
+    boardHeight: diagnostic.boardHeight,
+    imageMime: diagnostic.imageMime,
+    providerStage: diagnostic.providerStage,
+    schemaName: diagnostic.schemaName,
   };
   const serialized = JSON.stringify(payload);
   if (diagnostic.outcome === "error") console.error(serialized);

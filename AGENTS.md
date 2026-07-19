@@ -12,7 +12,7 @@ Read `YIYI_MASTER_DEVELOPMENT_SPEC.md` before making architectural or product ch
 - The product is continuous live voice, not voice-message sending.
 - Microphone permission is required for the core product.
 - The user describes their day, not individual clothes.
-- Show one decisive main recommendation and two weaker alternatives.
+- Show one decisive current recommendation. Multiple legal candidates are request-scoped ranking inputs, never exposed alternatives.
 - Accessories are real recommendation inputs.
 - Targeted revision must preserve every unmentioned item.
 - Do not add a full text-chat fallback.

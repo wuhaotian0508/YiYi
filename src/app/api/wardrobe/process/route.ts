@@ -3,7 +3,7 @@ import sharp from "sharp";
 import { zodTextFormat } from "openai/helpers/zod";
 import { WardrobeAnalysisSchema, type WardrobeAnalysis } from "@/domain/schemas";
 import { apiError, noStoreJson } from "@/lib/api/responses";
-import { takeRateLimit } from "@/lib/api/rate-limit";
+import { providerRoutesAllowed, takeRateLimit } from "@/lib/api/rate-limit";
 import { logApiDiagnostic, responseUsage, safeErrorMetadata } from "@/lib/api/diagnostics";
 
 export const runtime = "nodejs";
@@ -22,14 +22,16 @@ function mockAnalysis(): WardrobeAnalysis {
   return WardrobeAnalysisSchema.parse({
     category: "outerwear", subtype: "Soft jacket", primaryColor: "brown", secondaryColors: [], materials: ["Cotton blend"],
     pattern: "solid", fit: "relaxed", warmth: 3, formality: 2, comfort: 4, styleTags: ["relaxed", "clean"],
-    occasionTags: ["everyday"], weatherTags: ["mild"], aiConfidence: { category: .96, colors: .94, materials: .61, pattern: .96 },
+    occasionTags: ["everyday"], weatherTags: ["mild"], aiConfidence: { category: .96, colors: .94, materials: .61, pattern: .96, fit: .83, style: .74, formality: .78, warmth: .7, comfort: .62 },
+    featureProvenance: { category: "terra", colors: "terra", materials: "terra", pattern: "terra", fit: "terra", style: "terra", formality: "terra", warmth: "terra", comfort: "terra" },
     internalDescription: "Brown relaxed cotton-blend outerwear", userEditedFields: [],
   });
 }
 
 export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
-  const rate = takeRateLimit(request, "wardrobe-process", 20);
+  if (!providerRoutesAllowed()) return apiError(requestId, 503, "PUBLIC_PROTECTION_REQUIRED", "Live processing is not available until production rate protection is configured.", true);
+  const rate = await takeRateLimit(request, "wardrobe-process", 20);
   if (!rate.allowed) return apiError(requestId, 429, "RATE_LIMITED", `Try again in ${rate.retryAfterSeconds} seconds.`, true);
   try {
     const form = await request.formData();
@@ -83,7 +85,7 @@ export async function POST(request: Request) {
         store: false,
         reasoning: { effort: "none" },
         input: [{ role: "user", content: [
-          { type: "input_text", text: "Analyze this single transparent clothing cutout using only visible evidence. Use the supplied schema, controlled colors, specific accessory categories, unknown when uncertain, and no brand guesses." },
+          { type: "input_text", text: "Analyze this single transparent clothing cutout using only visible evidence. Use the supplied schema, controlled colors, specific accessory categories, unknown when uncertain, and no brand guesses. Return calibrated confidence for category, colors, materials, pattern, fit, style, formality, warmth, and comfort. Mark model-derived feature provenance as terra; user corrections will override it later." },
           { type: "input_image", image_url: imageUrl, detail: "high" },
         ] }],
         text: { format: zodTextFormat(WardrobeAnalysisSchema, "wardrobe_analysis") },

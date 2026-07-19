@@ -23,8 +23,8 @@ export const copy = {
   },
   calibration: {
     likes: "Which looks feel most like you?",
-    likesHint: "Choose three. Don’t overthink it.",
-    least: "Which one feels least like you?",
+    likesHint: "Like, pass, or skip. There is no required count.",
+    least: "What would you like to see less often?",
     avoid: "Anything YiYi should usually avoid?",
     profile: "Your style so far",
   },
@@ -49,6 +49,9 @@ export const copy = {
     empty: "Your wardrobe is empty",
     emptyBody: "Add your first items so YiYi can style them for you.",
     add: "Add items",
+  },
+  preferences: {
+    resetConfirm: "Reset all saved preferences and start fresh?",
   },
   processing: {
     removing: "Removing background…",

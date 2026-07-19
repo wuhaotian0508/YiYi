@@ -1,6 +1,6 @@
 # YiYi
 
-YiYi is a continuous voice-first morning outfit assistant for OpenAI Build Week. Describe the day, not the clothes; YiYi decides one main outfit from the real wardrobe, offers two quieter alternatives, and revises only what the user asks to change.
+YiYi is a continuous voice-first morning outfit assistant for OpenAI Build Week. Describe the day, not the clothes; YiYi decides one clear outfit from the real wardrobe and revises only what the user asks to change. Multiple legal candidates exist only inside the short-lived ranking step, never as choices the user must compare.
 
 ## Local development
 
@@ -23,6 +23,8 @@ pnpm test:e2e
 
 ## Architecture
 
-Zod schemas define the contracts. Deterministic domain code creates legal candidates and owns revisions/undo. GPT-5.6 Terra analyzes one item; GPT-5.6 Sol ranks only supplied legal candidates; OpenAI Realtime calls strict application tools through the official Agents SDK. Wardrobe data remains local in Dexie/IndexedDB.
+Zod schemas define the contracts. One constraint-first TypeScript decision pipeline merges context, starts search from required/preserved anchors, generates legal separates or one-piece templates, scores context/personalization/compatibility/comfort/novelty, and owns versioned revisions and undo. GPT-5.6 Terra analyzes one item; GPT-5.6 Sol visually evaluates only supplied legal candidates; OpenAI Realtime emits validated structured deltas through the official Agents SDK. Wardrobe data remains local in Dexie/IndexedDB.
+
+Production live-provider routes fail closed until distributed Upstash limits are configured. Per-instance limits are development-only; optional Vercel Firewall rules are defense in depth rather than an unverifiable code assertion.
 
 The project was built clean-room in a new repository. Judges can use the included example wardrobe without uploading personal images.
