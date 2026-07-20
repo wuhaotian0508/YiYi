@@ -11,7 +11,7 @@ Read `YIYI_MASTER_DEVELOPMENT_SPEC.md` before making architectural or product ch
 - All visible product copy and voice output are English.
 - The product is continuous live voice, not voice-message sending.
 - Microphone permission is required for the core product.
-- The user describes their day, not individual clothes.
+- The user may describe their day, name one or more wardrobe anchors, or do both. Do not require them to construct the whole outfit; preserve explicitly requested available items unless a hard constraint conflicts.
 - Show one decisive current recommendation. Multiple legal candidates are request-scoped ranking inputs, never exposed alternatives.
 - Accessories are real recommendation inputs.
 - Targeted revision must preserve every unmentioned item.

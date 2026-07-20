@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import sharp from "sharp";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { DailyIntentSchema, OutfitRankingResultSchema, WeatherContextSchema } from "@/domain/schemas";
@@ -10,6 +11,7 @@ import { openAIClientOptions, providerTimeoutMs } from "@/lib/api/provider-polic
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+const MAX_BOARD_PIXELS = 1024 * 1280;
 
 const RankRequestSchema = z.object({
   requestId: z.string().uuid(),
@@ -48,6 +50,25 @@ const RankRequestSchema = z.object({
 
 function boardMime(dataUrl: string): "image/webp" | "image/png" {
   return dataUrl.startsWith("data:image/png;base64,") ? "image/png" : "image/webp";
+}
+
+async function hasValidBoardMetadata(candidate: z.infer<typeof RankRequestSchema>["candidates"][number]) {
+  const match = /^data:(image\/(?:webp|png));base64,([A-Za-z0-9+/]*={0,2})$/.exec(candidate.boardDataUrl);
+  if (!match) return false;
+  const input = Buffer.from(match[2], "base64");
+  try {
+    const metadata = await sharp(input, { limitInputPixels: MAX_BOARD_PIXELS, failOn: "warning" }).metadata();
+    const expectedFormat = match[1] === "image/png" ? "png" : "webp";
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+    return metadata.format === expectedFormat
+      && (metadata.pages ?? 1) === 1
+      && width === candidate.boardWidth
+      && height === candidate.boardHeight
+      && width * height <= MAX_BOARD_PIXELS;
+  } catch {
+    return false;
+  }
 }
 
 function requestImageMime(candidates: z.infer<typeof RankRequestSchema>["candidates"]): "image/webp" | "image/png" | "mixed" {
@@ -91,9 +112,17 @@ export async function POST(request: Request) {
   if (!rate.available) return apiError(requestId, 503, "RATE_LIMIT_UNAVAILABLE", "Live ranking protection is temporarily unavailable.", true);
   if (!rate.allowed) return apiError(requestId, 429, "RATE_LIMITED", `Try again in ${rate.retryAfterSeconds} seconds.`, true);
   try {
-    const parsed = RankRequestSchema.safeParse(await request.json());
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return apiError(requestId, 400, "INVALID_JSON", "The request body was not valid JSON.");
+    }
+    const parsed = RankRequestSchema.safeParse(body);
     if (!parsed.success) return apiError(requestId, 400, "INVALID_RANK_REQUEST", "The outfit candidates were invalid.");
     const input = parsed.data;
+    const boardMetadata = await Promise.all(input.candidates.map(hasValidBoardMetadata));
+    if (boardMetadata.some((valid) => !valid)) return apiError(requestId, 400, "INVALID_RANK_REQUEST", "The outfit candidate images were invalid.");
     requestId = input.requestId;
     correlation = input.correlation ?? {};
     const boardBytes = input.candidates.reduce((sum, candidate) => sum + candidate.boardBytes, 0);

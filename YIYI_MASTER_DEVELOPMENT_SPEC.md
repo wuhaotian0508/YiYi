@@ -1614,7 +1614,9 @@ Help the user decide what to wear by understanding their day, desired
 feeling, comfort needs, activities, weather-related needs, and explicit
 constraints.
 
-The user should describe their day, not choose individual clothes.
+The user may describe their day, name one or more wardrobe anchors, or do both.
+Do not require the user to construct the whole outfit.
+Preserve explicitly requested available items unless they conflict with a hard constraint.
 Do not invent wardrobe items.
 Do not claim that an outfit or item changed until a tool returns success.
 Use the application tools for every recommendation, revision, confirmation,
@@ -1704,7 +1706,7 @@ Tool results must be small, serializable objects. Tool exceptions are transforme
 
 # 10. Weather
 
-The competition P0 flow calls `GET /api/weather` without coordinates and uses fixed demo weather. It does not request device location permission.
+The competition P0 flow explicitly uses `NEXT_PUBLIC_WEATHER_MODE=fixed-demo`, calls `GET /api/weather` without coordinates, and verifies the fixed-demo source. It does not request device location permission. A future live caller must supply both coordinates.
 
 The route can use Open-Meteo when both latitude and longitude are supplied explicitly by a future caller.
 

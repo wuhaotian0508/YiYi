@@ -12,15 +12,25 @@ export const maxDuration = 60;
 const MAX_INPUT_BYTES = 4_100_000;
 const MAX_INPUT_PIXELS = 60_000_000;
 const MAX_INPUT_DIMENSION = 12_000;
+const MAX_BACKGROUND_REMOVAL_BYTES = 5_000_000;
+const MAX_BACKGROUND_REMOVAL_PIXELS = 2_000_000;
+const MAX_BACKGROUND_REMOVAL_DIMENSION = 4_096;
+const MAX_NORMALIZED_OUTPUT_BYTES = 1_100_000;
 
-function supportedMagic(bytes: Uint8Array) {
+type DetectedImage = { format: "jpeg" | "png" | "webp" | "heif"; mime: "image/jpeg" | "image/png" | "image/webp" | "image/heic" };
+
+function detectedImage(bytes: Uint8Array): DetectedImage | null {
   const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   const png = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
   const webp = String.fromCharCode(...bytes.slice(8, 12)) === "WEBP";
   const box = String.fromCharCode(...bytes.slice(4, 8));
   const brand = String.fromCharCode(...bytes.slice(8, 12));
   const heif = box === "ftyp" && new Set(["heic", "heix", "hevc", "hevx", "mif1", "msf1"]).has(brand);
-  return jpeg || png || webp || heif;
+  if (jpeg) return { format: "jpeg", mime: "image/jpeg" };
+  if (png) return { format: "png", mime: "image/png" };
+  if (webp) return { format: "webp", mime: "image/webp" };
+  if (heif) return { format: "heif", mime: "image/heic" };
+  return null;
 }
 
 async function validImageGeometry(input: Buffer) {
@@ -34,6 +44,36 @@ async function validImageGeometry(input: Buffer) {
   } catch {
     return false;
   }
+}
+
+async function readResponseBodyWithinLimit(response: Response, maximumBytes: number) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) throw new Error("provider output too large");
+  if (!response.body) throw new Error("provider output missing");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maximumBytes) {
+      await reader.cancel();
+      throw new Error("provider output too large");
+    }
+    chunks.push(value);
+  }
+  if (total === 0) throw new Error("provider output empty");
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total);
+}
+
+async function validateBackgroundRemovalOutput(input: Buffer) {
+  const metadata = await sharp(input, { limitInputPixels: MAX_BACKGROUND_REMOVAL_PIXELS, failOn: "warning" }).metadata();
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  if (metadata.format !== "webp" || (metadata.pages ?? 1) !== 1 || width <= 0 || height <= 0
+    || width > MAX_BACKGROUND_REMOVAL_DIMENSION || height > MAX_BACKGROUND_REMOVAL_DIMENSION
+    || width * height > MAX_BACKGROUND_REMOVAL_PIXELS) throw new Error("invalid provider image metadata");
 }
 
 function mockAnalysis(): WardrobeAnalysis {
@@ -52,13 +92,21 @@ export async function POST(request: Request) {
   const rate = await takeRateLimit(request, "wardrobe-process", 20);
   if (!rate.available) return apiError(requestId, 503, "RATE_LIMIT_UNAVAILABLE", "Image processing protection is temporarily unavailable.", true);
   if (!rate.allowed) return apiError(requestId, 429, "RATE_LIMITED", `Try again in ${rate.retryAfterSeconds} seconds.`, true);
+  const requestContentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!/^multipart\/form-data(?:;|$)/.test(requestContentType)) return apiError(requestId, 415, "UNSUPPORTED_MEDIA_TYPE", "Send one image as multipart form data.");
   try {
-    const form = await request.formData();
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      return apiError(requestId, 400, "INVALID_MULTIPART", "The multipart form data was invalid.");
+    }
     const file = form.get("image");
     if (!(file instanceof File)) return apiError(requestId, 400, "IMAGE_REQUIRED", "Choose one image to continue.");
     if (file.size > MAX_INPUT_BYTES) return apiError(requestId, 413, "IMAGE_TOO_LARGE", "This photo is too large. Take a new photo or choose a smaller one.");
     const input = Buffer.from(await file.arrayBuffer());
-    if (!supportedMagic(input.subarray(0, 16))) return apiError(requestId, 415, "UNSUPPORTED_IMAGE", "Use a JPEG, PNG, WebP, or HEIC image.");
+    const detected = detectedImage(input.subarray(0, 16));
+    if (!detected) return apiError(requestId, 415, "UNSUPPORTED_IMAGE", "Use a JPEG, PNG, WebP, or HEIC image.");
     if (!(await validImageGeometry(input))) return apiError(requestId, 415, "INVALID_IMAGE", "Choose a valid single-frame photo.");
 
     if (process.env.AI_MODE !== "live") {
@@ -68,7 +116,7 @@ export async function POST(request: Request) {
 
     if (!process.env.PHOTOROOM_API_KEY || !process.env.OPENAI_API_KEY) return apiError(requestId, 503, "NOT_CONFIGURED", "Image processing is not configured.", true);
     const providerForm = new FormData();
-    providerForm.append("image_file", new Blob([input], { type: file.type }), file.name);
+    providerForm.append("image_file", new Blob([input], { type: detected.mime }), file.name);
     providerForm.append("format", "webp");
     providerForm.append("channels", "rgba");
     providerForm.append("size", "medium");
@@ -88,8 +136,15 @@ export async function POST(request: Request) {
     }
     let normalized: Buffer;
     try {
-      const removed = Buffer.from(await cutoutResponse.arrayBuffer());
-      normalized = await sharp(removed).trim().resize(860, 860, { fit: "inside", withoutEnlargement: true }).extend({ top: 82, bottom: 82, left: 82, right: 82, background: { r: 0, g: 0, b: 0, alpha: 0 } }).resize(1024, 1024, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 90, alphaQuality: 100 }).toBuffer();
+      const providerContentType = cutoutResponse.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+      if (providerContentType !== "image/webp") throw new Error("unexpected provider content type");
+      const removed = await readResponseBodyWithinLimit(cutoutResponse, MAX_BACKGROUND_REMOVAL_BYTES);
+      await validateBackgroundRemovalOutput(removed);
+      const fitted = await sharp(removed, { limitInputPixels: MAX_BACKGROUND_REMOVAL_PIXELS, failOn: "warning" }).trim().resize(860, 860, { fit: "inside", withoutEnlargement: true }).toBuffer();
+      normalized = await sharp(fitted, { limitInputPixels: MAX_BACKGROUND_REMOVAL_PIXELS, failOn: "warning" }).resize(1024, 1024, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 90, alphaQuality: 100 }).toBuffer();
+      if (normalized.byteLength > MAX_NORMALIZED_OUTPUT_BYTES) throw new Error("normalized output too large");
+      const normalizedMetadata = await sharp(normalized, { limitInputPixels: 1_100_000, failOn: "warning" }).metadata();
+      if (normalizedMetadata.format !== "webp" || normalizedMetadata.width !== 1024 || normalizedMetadata.height !== 1024 || (normalizedMetadata.pages ?? 1) !== 1) throw new Error("invalid normalized output");
     } catch (error) {
       const metadata = safeErrorMetadata(error);
       logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", ...metadata, httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt, errorCode: "INVALID_BACKGROUND_REMOVAL_OUTPUT" });

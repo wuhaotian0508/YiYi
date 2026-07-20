@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { zodTextFormat } from "openai/helpers/zod";
 import { OutfitRankingResultSchema } from "@/domain/schemas";
@@ -12,8 +13,10 @@ import { rankOutfits } from "@/lib/recommendation/client-ranking";
 import { demoIntent, demoWardrobe } from "@/mocks/wardrobe";
 
 const candidateId = "11111111-1111-4111-8111-111111111111";
-const validWebpDataUrl = "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAUAmJaQAA3AA/vz0AAA=";
-const validPngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4////fwAJ+wP9CNHoHgAAAABJRU5ErkJggg==";
+const validWebp = await sharp({ create: { width: 512, height: 640, channels: 4, background: { r: 220, g: 210, b: 200, alpha: 1 } } }).webp().toBuffer();
+const validPng = await sharp({ create: { width: 512, height: 640, channels: 4, background: { r: 220, g: 210, b: 200, alpha: 1 } } }).png().toBuffer();
+const validWebpDataUrl = `data:image/webp;base64,${validWebp.toString("base64")}`;
+const validPngDataUrl = `data:image/png;base64,${validPng.toString("base64")}`;
 const routeBody = {
   requestId: "99999999-9999-4999-8999-999999999999",
   originalUtterance: "Gallery and dinner",
@@ -29,7 +32,7 @@ const routeBody = {
     ],
     deterministicScore: 80,
     boardDataUrl: validWebpDataUrl,
-    boardBytes: 44,
+    boardBytes: validWebp.byteLength,
     boardWidth: 512,
     boardHeight: 640,
   }],
@@ -59,9 +62,9 @@ describe("ranking boundary semantics", () => {
     const valid = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(routeBody) }));
     const payload = await valid.json();
     expect(valid.status).toBe(200);
-    expect(payload).toMatchObject({ source: "mock", model: null, diagnostics: { boardBytes: 44, candidateCount: 1 } });
+    expect(payload).toMatchObject({ source: "mock", model: null, diagnostics: { boardBytes: validWebp.byteLength, candidateCount: 1 } });
 
-    const png = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, candidates: [{ ...routeBody.candidates[0], boardDataUrl: validPngDataUrl, boardBytes: 91 }] }) }));
+    const png = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, candidates: [{ ...routeBody.candidates[0], boardDataUrl: validPngDataUrl, boardBytes: validPng.byteLength }] }) }));
     expect(png.status).toBe(200);
 
     const empty = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, originalUtterance: "" }) }));
@@ -77,6 +80,30 @@ describe("ranking boundary semantics", () => {
     const forged = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, candidates: [{ ...routeBody.candidates[0], boardBytes: 2 }] }) }));
     expect(forged.status).toBe(400);
     expect(await forged.json()).toMatchObject({ error: { code: "INVALID_RANK_REQUEST" } });
+  });
+
+  it("rejects a decoded board whose real dimensions exceed and contradict its declaration", async () => {
+    vi.stubEnv("AI_MODE", "mock");
+    const oversized = await sharp({ create: { width: 4096, height: 4096, channels: 3, background: { r: 1, g: 2, b: 3 } } }).webp().toBuffer();
+    expect(oversized.byteLength).toBeLessThan(240_000);
+    const response = await rankRoute(new Request("http://localhost/api/outfits/rank", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() },
+      body: JSON.stringify({ ...routeBody, candidates: [{ ...routeBody.candidates[0], boardDataUrl: `data:image/webp;base64,${oversized.toString("base64")}`, boardBytes: oversized.byteLength, boardWidth: 512, boardHeight: 640 }] }),
+    }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "INVALID_RANK_REQUEST" } });
+  });
+
+  it("classifies malformed JSON separately from an invalid ranking schema", async () => {
+    vi.stubEnv("AI_MODE", "mock");
+    const malformed = await rankRoute(new Request("http://localhost/api/outfits/rank", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() },
+      body: "{not-json",
+    }));
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ error: { code: "INVALID_JSON" } });
   });
 
   it("fails closed in live production unless distributed protection is actually configured", async () => {

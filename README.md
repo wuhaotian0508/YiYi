@@ -1,6 +1,6 @@
 # YiYi
 
-YiYi is a continuous voice-first morning outfit assistant for OpenAI Build Week. Describe the day, not the clothes; YiYi decides one clear outfit from the real wardrobe and revises only what the user asks to change. Multiple legal candidates exist only inside the short-lived ranking step, never as choices the user must compare.
+YiYi is a continuous voice-first morning outfit assistant for OpenAI Build Week. Describe the day, name wardrobe anchors, or do both; YiYi decides the rest of one clear outfit and revises only what the user asks to change. Multiple legal candidates exist only inside the short-lived ranking step, never as choices the user must compare.
 
 ## Local development
 
@@ -12,7 +12,7 @@ pnpm dev
 
 Mock mode is the default and does not require provider credentials. Open http://localhost:3000 on a narrow mobile viewport.
 
-The competition build intentionally uses fixed demo weather. `/api/weather` can normalize Open-Meteo data when coordinates are explicitly supplied, but the current Today flow does not request device location.
+The competition build explicitly sets `NEXT_PUBLIC_WEATHER_MODE=fixed-demo`. `/api/weather` can normalize Open-Meteo data when both coordinates are explicitly supplied, but the current Today flow does not request device location and reports the `fixed-demo` source.
 
 ## Verification
 

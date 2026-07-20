@@ -6,6 +6,7 @@ import { OpenAIRealtimeVoiceAdapter, resolveAvailabilityItemId, yiyiTurnDetectio
 import { shouldSeedDemoWardrobe } from "@/lib/storage/db";
 import { demoIntent } from "@/mocks/wardrobe";
 import { copy } from "@/content/copy";
+import { configuredWeatherMode, resolveWeatherForSession } from "@/lib/weather/client";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -130,6 +131,66 @@ describe("audit regressions", () => {
     expect(response.status).toBe(200);
     expect(payload.source).toBe("fixed-demo");
     expect(payload.weather.summary).toBe("58° · Light rain");
+  });
+
+  it("makes competition demo weather explicit and restores persisted weather only when fresh weather fails", () => {
+    vi.stubEnv("NEXT_PUBLIC_WEATHER_MODE", "fixed-demo");
+    const fresh = { minApparentTempC: 10, maxApparentTempC: 14, precipitationProbability: 5, expectedRain: false, windy: false, summary: "Fresh", sourceTimestamp: 2 };
+    const persisted = { ...fresh, summary: "Persisted", sourceTimestamp: 1 };
+    expect(configuredWeatherMode()).toBe("fixed-demo");
+    expect(resolveWeatherForSession(fresh, persisted)).toBe(fresh);
+    expect(resolveWeatherForSession(null, persisted)).toBe(persisted);
+    expect(resolveWeatherForSession(null, null)).toBeNull();
+    vi.stubEnv("NEXT_PUBLIC_WEATHER_MODE", "device-location");
+    expect(configuredWeatherMode()).toBe("invalid");
+  });
+
+  it("rejects either half of a coordinate pair without calling the provider", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected provider call"));
+    for (const query of ["latitude=37.8", "longitude=-122.2"]) {
+      const response = await getWeather(new Request(`http://localhost/api/weather?${query}`));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "INVALID_LOCATION", retryable: false } });
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses the next twelve provider hours at night instead of the first twelve of the day", async () => {
+    const now = Date.parse("2026-07-21T03:30:00.000Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const hour = 60 * 60;
+    const firstEpochSecond = Math.floor(now / 1_000) - (20 * hour) - (30 * 60);
+    const times = Array.from({ length: 48 }, (_, index) => firstEpochSecond + index * hour);
+    const values = times.map((_, index) => index);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      timezone: "America/Los_Angeles",
+      utc_offset_seconds: -25_200,
+      hourly: {
+        time: times,
+        apparent_temperature: values,
+        precipitation_probability: values,
+        wind_speed_10m: values,
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    const response = await getWeather(new Request("http://localhost/api/weather?latitude=37.7&longitude=-122.4"));
+    const payload = await response.json();
+    expect(response.status).toBe(200);
+    expect(payload.weather).toMatchObject({ minApparentTempC: 21, maxApparentTempC: 32, precipitationProbability: 32, sourceTimestamp: times[21] * 1_000 });
+    const providerUrl = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(providerUrl.searchParams.get("forecast_days")).toBe("2");
+    expect(providerUrl.searchParams.get("timeformat")).toBe("unixtime");
+  });
+
+  it("rejects non-empty hourly arrays whose lengths do not match hourly.time", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      timezone: "UTC",
+      utc_offset_seconds: 0,
+      hourly: { time: [1_800_000_000, 1_800_003_600], apparent_temperature: [10], precipitation_probability: [0, 0], wind_speed_10m: [1, 1] },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const response = await getWeather(new Request("http://localhost/api/weather?latitude=37.7&longitude=-122.4"));
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: "WEATHER_FAILED" } });
   });
 
   it("returns a bounded structured failure for malformed live weather data", async () => {

@@ -4,7 +4,7 @@ import { POST as processWardrobeItem } from "@/app/api/wardrobe/process/route";
 async function requestWith(bytes: Uint8Array, type = "image/png") {
   const form = new FormData();
   form.set("image", new File([bytes.slice().buffer as ArrayBuffer], "item", { type }));
-  const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "x-forwarded-for": crypto.randomUUID() } });
+  const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=test", "x-forwarded-for": crypto.randomUUID() } });
   vi.spyOn(request, "formData").mockResolvedValue(form);
   return processWardrobeItem(request);
 }

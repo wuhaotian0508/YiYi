@@ -6,6 +6,19 @@ import { openAIClientOptions, providerTimeoutMs } from "@/lib/api/provider-polic
 
 export const runtime = "nodejs";
 
+function requestOriginIsAllowed(origin: string | null, host: string | null) {
+  // Non-browser and same-origin server requests may omit Origin. Browser requests
+  // that provide it must match the effective host exactly, including the port.
+  if (!origin) return true;
+  if (!host) return false;
+  try {
+    const parsed = new URL(origin);
+    return (parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.origin === origin && parsed.host === host;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(request: Request) {
   const routeStartedAt = Date.now();
   const requestId = crypto.randomUUID();
@@ -22,8 +35,9 @@ export async function POST(request: Request) {
   if (!rate.available) return fail(503, "RATE_LIMIT_UNAVAILABLE", "Live voice protection is temporarily unavailable.", true);
   if (!rate.allowed) return fail(429, "RATE_LIMITED", `Try again in ${rate.retryAfterSeconds} seconds.`, true, rate.retryAfterSeconds);
   const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  if (origin && host && new URL(origin).host !== host) return fail(403, "INVALID_ORIGIN", "Request origin is not allowed.");
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",", 1)[0]?.trim();
+  const host = request.headers.get("host") || forwardedHost || null;
+  if (!requestOriginIsAllowed(origin, host)) return fail(403, "INVALID_ORIGIN", "Request origin is not allowed.");
   if (process.env.NEXT_PUBLIC_VOICE_MODE !== "live") return fail(409, "MOCK_MODE", "Live voice is disabled in this environment.");
   if (!process.env.OPENAI_API_KEY) return fail(503, "NOT_CONFIGURED", "Live voice is not configured.", true);
   const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-mini";

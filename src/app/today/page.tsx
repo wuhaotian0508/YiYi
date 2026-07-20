@@ -18,7 +18,7 @@ import { updateProfileFromOutfitFeedback } from "@/domain/preferences/feedback";
 import { recommendationPreferenceSummary } from "@/domain/preferences/summary";
 import { assertDisplayedOutfitLegal, runRecommendationDecision, validateRestoredOutfit } from "@/domain/recommendation/engine";
 import { createRecommendationContext, RecommendationError } from "@/domain/recommendation/context";
-import { IntentDeltaSchema, WeatherContextSchema, type DailyIntent, type IntentDelta, type Outfit, type OutfitSlot, type WardrobeItem, type WeatherContext } from "@/domain/schemas";
+import { IntentDeltaSchema, type DailyIntent, type IntentDelta, type Outfit, type OutfitSlot, type WardrobeItem, type WeatherContext } from "@/domain/schemas";
 import { configureSounds, playSound, unlockSounds } from "@/lib/audio/sound-system";
 import { calmSpring } from "@/lib/motion/tokens";
 import { MockVoiceSessionAdapter, OpenAIRealtimeVoiceAdapter, resolveAvailabilityItemId, type VoiceToolHandlers } from "@/lib/realtime/voice-session";
@@ -28,6 +28,7 @@ import { rankOutfits } from "@/lib/recommendation/client-ranking";
 import { RecommendationOperationController, runCommitPhase, type OperationToken } from "@/lib/recommendation/operation-controller";
 import { commitOutfitMutation, confirmOutfitMutation, resetInvalidOutfitSession, undoOutfitMutation, updateItemAvailabilityMutation } from "@/lib/recommendation/session-mutations";
 import { db, getExperienceMode, getSoundEnabled, seedPreferences, seedWardrobe } from "@/lib/storage/db";
+import { fetchConfiguredWeather, resolveWeatherForSession } from "@/lib/weather/client";
 import { demoIntent, demoPreferenceProfile, demoWardrobe } from "@/mocks/wardrobe";
 
 type Phase = "idle" | "connecting" | "listening" | "understanding" | "generating" | "presenting" | "revising" | "paused" | "confirmed" | "error";
@@ -118,16 +119,14 @@ export function TodayPage() {
       const experienceMode = await getExperienceMode();
       await seedPreferences(experienceMode === "personal" ? createNeutralPreferenceProfile() : demoPreferenceProfile);
       configureSounds(await getSoundEnabled());
-      const weatherResponse = await fetch("/api/weather", { cache: "no-store" }).catch(() => null);
-      if (weatherResponse?.ok) {
-        const payload: unknown = await weatherResponse.json();
-        const parsed = WeatherContextSchema.safeParse(typeof payload === "object" && payload ? (payload as { weather?: unknown }).weather : null);
-        if (parsed.success) { setWeather(parsed.data); weatherRef.current = parsed.data; }
-      }
+      const freshWeather = (await fetchConfiguredWeather())?.weather ?? null;
       const items = await db.wardrobeItems.toArray();
       const sessions = await db.dailySessions.where("dateKey").equals(localDateKey()).toArray();
       const session = sessions.sort((a, b) => b.updatedAt - a.updatedAt)[0];
       if (cancelled) return;
+      const resolvedWeather = resolveWeatherForSession(freshWeather, session?.weather);
+      setWeather(resolvedWeather);
+      weatherRef.current = resolvedWeather;
       setWardrobe(items);
       wardrobeRef.current = items;
       setHydrated(true);
@@ -135,7 +134,7 @@ export function TodayPage() {
         const version = await db.outfitVersions.get(session.currentVersionId);
         if (!cancelled && version) {
           const profile = (await db.preferenceProfiles.get("default")) ?? createNeutralPreferenceProfile();
-          const validForCurrentContext = validateRestoredOutfit({ version, wardrobe: items, intent: session.intent, profile, weather: weatherRef.current }).valid;
+          const validForCurrentContext = validateRestoredOutfit({ version, wardrobe: items, intent: session.intent, profile, weather: resolvedWeather }).valid;
           if (!validForCurrentContext) {
             const repaired = await resetInvalidOutfitSession({ sessionId: session.id, expectedVersionId: version.id, expectedGeneration: session.operationGeneration ?? 0 });
             sessionIdRef.current = repaired.id;

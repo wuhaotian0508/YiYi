@@ -96,4 +96,33 @@ describe("API rate-limit guard", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ error: { code: "RATE_LIMIT_UNAVAILABLE", retryable: true } });
   });
+
+  it("rejects malformed or mismatched Realtime origins without throwing", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "mock");
+    for (const headers of [
+      { origin: "not a url", host: "example.com" },
+      { origin: "https://attacker.example", host: "example.com" },
+      { origin: "https://example.com:444", host: "example.com:443" },
+    ]) {
+      const response = await createRealtimeToken(new Request("http://localhost/api/realtime/token", { method: "POST", headers: { ...headers, "x-forwarded-for": crypto.randomUUID() } }));
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: { code: "INVALID_ORIGIN" } });
+    }
+  });
+
+  it("allows a missing Origin under the current same-site strategy and supports custom domains with ports", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "mock");
+    const cases: HeadersInit[] = [
+      { host: "custom.example", "x-forwarded-for": crypto.randomUUID() },
+      { origin: "https://custom.example", host: "custom.example", "x-forwarded-for": crypto.randomUUID() },
+      { origin: "http://localhost:3100", host: "localhost:3100", "x-forwarded-for": crypto.randomUUID() },
+    ];
+    for (const headers of cases) {
+      const response = await createRealtimeToken(new Request("http://localhost/api/realtime/token", { method: "POST", headers }));
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: { code: "MOCK_MODE" } });
+    }
+  });
 });

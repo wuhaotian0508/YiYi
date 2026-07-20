@@ -10,6 +10,7 @@ import { changedAndPreserved, runRecommendationDecision, validateRankingReferenc
 import { matchesSoftPreference, normalizedWeightsFor, outfitComfortPerformance, outfitSimilarity, outfitThermalPerformance, scoreCandidate } from "@/domain/recommendation/scoring";
 import { IntentDeltaSchema, PreferenceDeltaSchema, PreferenceRuleSchema, type IntentDelta, type PreferenceDelta, type WardrobeItem } from "@/domain/schemas";
 import { demoIntent, demoPreferenceProfile, demoWardrobe } from "@/mocks/wardrobe";
+import { realtimeAgentInstructions } from "@/prompts/realtime-agent";
 
 const rain = { minApparentTempC: 8, maxApparentTempC: 13, precipitationProbability: 80, expectedRain: true, windy: true, summary: "Cold rain", sourceTimestamp: 1_721_088_000_000 };
 const zeroAdjustments = { formality: 0, warmth: 0, comfort: 0, colorfulness: 0, walkingPriority: 0, layering: 0, structure: 0 };
@@ -27,6 +28,16 @@ function addedItem(id: string, category: WardrobeItem["category"], subtype: stri
 }
 
 describe("constraint-first recommendation", () => {
+  it("treats an explicitly named available wardrobe item as a required anchor", () => {
+    const anchor = demoWardrobe.find((item) => item.availability === "available" && item.category === "top")!;
+    const intent = { ...demoIntent, requiredItemIds: [anchor.id], freeformSummary: `I want to wear ${anchor.subtype}.` };
+    const decision = runRecommendationDecision({ wardrobe: demoWardrobe, intent, profile: createNeutralPreferenceProfile(), weather: null, operation: "initial" });
+    expect(decision.deterministicAnswer.itemIds.top).toBe(anchor.id);
+    expect(realtimeAgentInstructions).toContain("The user may describe their day, name one or more wardrobe anchors, or do both.");
+    expect(realtimeAgentInstructions).toContain("Preserve explicitly requested available items unless they conflict with a hard constraint.");
+    expect(realtimeAgentInstructions).not.toContain("not choose individual clothes");
+  });
+
   it("routes every initial candidate through the canonical validator", () => {
     const decision = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: demoPreferenceProfile, weather: rain, operation: "initial" });
     expect(decision.candidates.length).toBeGreaterThan(3);
