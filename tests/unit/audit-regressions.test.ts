@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GET as getWeather } from "@/app/api/weather/route";
 import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
 import { logApiDiagnostic, safeErrorMetadata } from "@/lib/api/diagnostics";
@@ -6,6 +6,11 @@ import { OpenAIRealtimeVoiceAdapter, resolveAvailabilityItemId, yiyiTurnDetectio
 import { shouldSeedDemoWardrobe } from "@/lib/storage/db";
 import { demoIntent } from "@/mocks/wardrobe";
 import { copy } from "@/content/copy";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("audit regressions", () => {
   it("seeds demo clothes once, but never for personal mode or after a completed seed", () => {
@@ -67,12 +72,72 @@ describe("audit regressions", () => {
     expect(states).not.toContain("error");
   });
 
+  it("reuses one pending live voice connection instead of requesting another token", async () => {
+    const handlers: VoiceToolHandlers = {
+      requestRecommendation: async () => ({ success: false, summary: "unused" }),
+      revise: async () => ({ success: false, summary: "unused" }),
+      confirm: async () => ({ success: false, summary: "unused" }),
+      setAvailability: async () => ({ success: false, summary: "unused" }),
+      savePreference: async () => ({ success: false, summary: "unused" }),
+    };
+    let tokenRequests = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      tokenRequests += 1;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    });
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers);
+
+    const first = adapter.connect();
+    const second = adapter.connect();
+    await Promise.resolve();
+
+    expect(tokenRequests).toBe(1);
+    expect(second).toBe(first);
+    await adapter.disconnect();
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+    fetchSpy.mockRestore();
+  });
+
+  it("preserves token 429 status and Retry-After without retrying", async () => {
+    const handlers: VoiceToolHandlers = {
+      requestRecommendation: async () => ({ success: false, summary: "unused" }),
+      revise: async () => ({ success: false, summary: "unused" }),
+      confirm: async () => ({ success: false, summary: "unused" }),
+      setAvailability: async () => ({ success: false, summary: "unused" }),
+      savePreference: async () => ({ success: false, summary: "unused" }),
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      requestId: "99999999-9999-4999-8999-999999999999",
+      error: { code: "RATE_LIMITED", message: "Try again later.", retryable: true },
+    }), { status: 429, headers: { "Content-Type": "application/json", "Retry-After": "17" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers);
+
+    await expect(adapter.connect()).rejects.toMatchObject({
+      name: "VoiceConnectionFailure",
+      stage: "token",
+      code: "RATE_LIMITED",
+      httpStatus: 429,
+      retryAfterMs: 17_000,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("returns fixed demo weather when Today supplies no coordinates", async () => {
     const response = await getWeather(new Request("http://localhost/api/weather"));
     const payload = await response.json();
     expect(response.status).toBe(200);
     expect(payload.source).toBe("fixed-demo");
     expect(payload.weather.summary).toBe("58° · Light rain");
+  });
+
+  it("returns a bounded structured failure for malformed live weather data", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ hourly: { apparent_temperature: "bad" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const response = await getWeather(new Request("http://localhost/api/weather?latitude=37.7&longitude=-122.4"));
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: "WEATHER_FAILED", retryable: true } });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("logs only allowlisted diagnostic metadata, never error messages", () => {
@@ -88,12 +153,17 @@ describe("audit regressions", () => {
       ...metadata,
       durationMs: 123.4,
       errorCode: "RANK_PROVIDER_FAILED",
+      recommendationOperationId: "session-1:operation-2",
+      profileVersion: 7,
+      outfitVersion: "11111111-1111-4111-8111-111111111111",
     });
     const serialized = String(spy.mock.calls[0]?.[0]);
     expect(serialized).toContain("99999999-9999-4999-8999-999999999999");
     expect(serialized).toContain("RANK_PROVIDER_FAILED");
     expect(serialized).toContain("invalid_image");
     expect(serialized).toContain("req_safe123");
+    expect(serialized).toContain("session-1:operation-2");
+    expect(serialized).toContain('"profileVersion":7');
     expect(serialized).not.toContain("secret-token");
     expect(serialized).not.toContain("data:image");
     spy.mockRestore();

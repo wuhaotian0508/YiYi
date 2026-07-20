@@ -1,0 +1,12 @@
+{
+  "tool": "Next.js 16.2.10 experimental-analyze (Turbopack)",
+  "productionStaticJsBytes": 3209661,
+  "globalCssBytes": 51881,
+  "calibrationLabProductionEntryChunks": [
+    { "file": "1u6ha_nz1pab9.js", "bytes": 37852 },
+    { "file": "2i69gn_yf_0b6.js", "bytes": 284375 },
+    { "file": "0o53i9-4jk5kt.js", "bytes": 72860 }
+  ],
+  "calibrationLabRealComponentPresentInProductionGraph": true,
+  "reviewInstrumentationMatchesInProductionClientChunks": 0
+}

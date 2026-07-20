@@ -12,6 +12,8 @@ import { rankOutfits } from "@/lib/recommendation/client-ranking";
 import { demoIntent, demoWardrobe } from "@/mocks/wardrobe";
 
 const candidateId = "11111111-1111-4111-8111-111111111111";
+const validWebpDataUrl = "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAUAmJaQAA3AA/vz0AAA=";
+const validPngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4////fwAJ+wP9CNHoHgAAAABJRU5ErkJggg==";
 const routeBody = {
   requestId: "99999999-9999-4999-8999-999999999999",
   originalUtterance: "Gallery and dinner",
@@ -26,8 +28,8 @@ const routeBody = {
       "44444444-4444-4444-8444-444444444441",
     ],
     deterministicScore: 80,
-    boardDataUrl: "data:image/webp;base64,AA==",
-    boardBytes: 2,
+    boardDataUrl: validWebpDataUrl,
+    boardBytes: 44,
     boardWidth: 512,
     boardHeight: 640,
   }],
@@ -57,9 +59,9 @@ describe("ranking boundary semantics", () => {
     const valid = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(routeBody) }));
     const payload = await valid.json();
     expect(valid.status).toBe(200);
-    expect(payload).toMatchObject({ source: "mock", model: null, diagnostics: { boardBytes: 2, candidateCount: 1 } });
+    expect(payload).toMatchObject({ source: "mock", model: null, diagnostics: { boardBytes: 44, candidateCount: 1 } });
 
-    const png = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, candidates: [{ ...routeBody.candidates[0], boardDataUrl: "data:image/png;base64,AA==" }] }) }));
+    const png = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, candidates: [{ ...routeBody.candidates[0], boardDataUrl: validPngDataUrl, boardBytes: 91 }] }) }));
     expect(png.status).toBe(200);
 
     const empty = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, originalUtterance: "" }) }));
@@ -68,6 +70,13 @@ describe("ranking boundary semantics", () => {
 
     const oversized = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, candidates: [{ ...routeBody.candidates[0], boardBytes: 240_001 }] }) }));
     expect(oversized.status).toBe(400);
+  });
+
+  it("rejects a forged board MIME or byte count before provider execution", async () => {
+    vi.stubEnv("AI_MODE", "mock");
+    const forged = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify({ ...routeBody, candidates: [{ ...routeBody.candidates[0], boardBytes: 2 }] }) }));
+    expect(forged.status).toBe(400);
+    expect(await forged.json()).toMatchObject({ error: { code: "INVALID_RANK_REQUEST" } });
   });
 
   it("fails closed in live production unless distributed protection is actually configured", async () => {
@@ -104,9 +113,10 @@ describe("ranking boundary semantics", () => {
       diagnostics: { requestId: "99999999-9999-4999-8999-999999999998", boardBytes: 2, candidateCount: 1 },
     }), { status: 200, headers: { "content-type": "application/json" } }));
     const intent = { ...demoIntent, freeformSummary: "" };
-    const ranked = await rankOutfits({ candidates: [candidate], wardrobe: demoWardrobe, intent, originalUtterance: " ", preferenceSummary: "", weather: null });
-    const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { originalUtterance: string };
+    const ranked = await rankOutfits({ candidates: [candidate], wardrobe: demoWardrobe, intent, originalUtterance: " ", preferenceSummary: "", weather: null, recommendationOperationId: "session-1:operation-2", profileVersion: 7, outfitVersion: candidate.id });
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { originalUtterance: string; correlation: { recommendationOperationId: string; profileVersion: number; outfitVersion: string } };
     expect(requestBody.originalUtterance).toBe("Structured daily outfit request.");
+    expect(requestBody.correlation).toEqual({ recommendationOperationId: "session-1:operation-2", profileVersion: 7, outfitVersion: candidate.id });
     expect(ranked).toMatchObject({ source: "fallback", model: null, diagnosticCode: "INVALID_RANK_IDS" });
     expect(ranked.outfit.id).toBe(candidate.id);
   });

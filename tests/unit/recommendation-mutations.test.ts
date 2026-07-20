@@ -1,10 +1,12 @@
 import "fake-indexeddb/auto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
+import { preferenceDeltaForOption } from "@/domain/preferences/explicit-options";
+import { applyPreferenceDelta } from "@/domain/preferences/profile-mutations";
 import { runRecommendationDecision, validateRestoredOutfit } from "@/domain/recommendation/engine";
 import { RecommendationError } from "@/domain/recommendation/context";
-import { RecommendationOperationController } from "@/lib/recommendation/operation-controller";
-import { commitOutfitMutation, confirmOutfitMutation, resetInvalidOutfitSession, undoOutfitMutation } from "@/lib/recommendation/session-mutations";
+import { RecommendationOperationController, runCommitPhase } from "@/lib/recommendation/operation-controller";
+import { commitOutfitMutation, confirmOutfitMutation, resetInvalidOutfitSession, undoOutfitMutation, updateItemAvailabilityMutation } from "@/lib/recommendation/session-mutations";
 import { db, getExperienceMode, seedPreferences, seedWardrobe, setExperienceMode } from "@/lib/storage/db";
 import { demoIntent, demoPreferenceProfile, demoWardrobe } from "@/mocks/wardrobe";
 
@@ -30,6 +32,33 @@ describe("recommendation operation and persistence ordering", () => {
     expect(() => controller.begin(null)).toThrow("OUTFIT_OPERATION_IN_PROGRESS");
     controller.finish(first);
     expect(controller.begin(null)).toMatchObject({ id: 2, phase: "preparing" });
+  });
+
+  it("keeps a delayed mutation locked through its commit and publish boundary", async () => {
+    let release!: () => void;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    const controller = new RecommendationOperationController();
+    const token = controller.begin(null);
+    const mutation = runCommitPhase(controller, token, async () => { await delayed; return "committed"; });
+
+    expect(token.phase).toBe("committing");
+    expect(controller.cancel()).toBe(false);
+    expect(() => controller.begin(null)).toThrow("OUTFIT_OPERATION_IN_PROGRESS");
+    release();
+    await expect(mutation).resolves.toBe("committed");
+    expect(token.phase).toBe("publishing");
+    expect(() => controller.begin(null)).toThrow("OUTFIT_OPERATION_IN_PROGRESS");
+    controller.finish(token);
+    expect(controller.isBusy()).toBe(false);
+  });
+
+  it("updates availability atomically and returns the same persisted wardrobe snapshot", async () => {
+    await db.wardrobeItems.bulkPut(demoWardrobe);
+    const itemId = demoWardrobe[0]!.id;
+    const items = await updateItemAvailabilityMutation({ itemId, availability: "laundry", reason: "Needs washing" });
+
+    expect(items?.find((item) => item.id === itemId)).toMatchObject({ availability: "laundry", unavailableReason: "Needs washing" });
+    expect(await db.wardrobeItems.get(itemId)).toMatchObject({ availability: "laundry", unavailableReason: "Needs washing" });
   });
 
   it("clears a persisted current version that is no longer canonical", async () => {
@@ -77,6 +106,40 @@ describe("recommendation operation and persistence ordering", () => {
     controller.finish(token);
     const persisted = await db.dailySessions.get(sessionId);
     expect({ versionId: localPublishedVersionId, generation: localPublishedGeneration }).toEqual({ versionId: persisted?.currentVersionId, generation: persisted?.operationGeneration });
+  });
+
+  it("allows exactly one of two concurrent commits from the same base and leaves no orphan version", async () => {
+    const profile = createNeutralPreferenceProfile();
+    const firstOutfit = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile, weather: null, operation: "initial" }).deterministicAnswer;
+    const first = await commitOutfitMutation({ sessionId, dateKey, intent: demoIntent, weather: null, outfit: firstOutfit, baseVersionId: null, expectedGeneration: 0, revisionRequest: null });
+    const candidateA = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile, weather: null, operation: "random_new_outfit", currentOutfit: firstOutfit, shownOutfitIds: [firstOutfit.id], requestId: "66666666-6666-4666-8666-666666666661" }).deterministicAnswer;
+    const candidateB = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile, weather: null, operation: "random_new_outfit", currentOutfit: firstOutfit, shownOutfitIds: [firstOutfit.id], requestId: "66666666-6666-4666-8666-666666666662" }).deterministicAnswer;
+
+    const results = await Promise.allSettled([
+      commitOutfitMutation({ sessionId, dateKey, intent: demoIntent, weather: null, outfit: candidateA, baseVersionId: first.versionId, expectedGeneration: 1, revisionRequest: "A" }),
+      commitOutfitMutation({ sessionId, dateKey, intent: demoIntent, weather: null, outfit: candidateB, baseVersionId: first.versionId, expectedGeneration: 1, revisionRequest: "B" }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toEqual([
+      expect.objectContaining({ reason: expect.objectContaining({ code: "STALE_OPERATION" }) }),
+    ]);
+    const persisted = await db.dailySessions.get(sessionId);
+    expect(await db.outfitVersions.count()).toBe(2);
+    expect(await db.outfitVersions.get(persisted!.currentVersionId!)).toBeDefined();
+  });
+
+  it("rolls back an outfit version when the session write is interrupted", async () => {
+    const outfit = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: createNeutralPreferenceProfile(), weather: null, operation: "initial" }).deterministicAnswer;
+    const put = vi.spyOn(db.dailySessions, "put").mockImplementationOnce(() => {
+      throw new Error("injected-session-write-failure");
+    });
+
+    await expect(commitOutfitMutation({ sessionId, dateKey, intent: demoIntent, weather: null, outfit, baseVersionId: null, expectedGeneration: 0, revisionRequest: null }))
+      .rejects.toThrow("injected-session-write-failure");
+    expect(await db.outfitVersions.count()).toBe(0);
+    expect(await db.dailySessions.count()).toBe(0);
+    put.mockRestore();
   });
 
   it("refuses to undo into a historical outfit that is no longer canonical", async () => {
@@ -132,5 +195,55 @@ describe("recommendation operation and persistence ordering", () => {
     expect(await db.preferenceProfiles.get("default")).toBeUndefined();
     expect(await db.dailySessions.count()).toBe(0);
     expect(await db.outfitVersions.count()).toBe(0);
+  });
+
+  it("does not preserve a canned demo baseline after it was edited and then switched to personal", async () => {
+    await seedWardrobe(demoWardrobe, { explicit: true });
+    await seedPreferences(demoPreferenceProfile);
+    await db.preferenceProfiles.put({
+      ...demoPreferenceProfile,
+      provenance: "personal",
+      softPreferences: [
+        ...demoPreferenceProfile.softPreferences,
+        { key: "manual-note", value: "soft textures", strength: "soft", polarity: "prefer" },
+      ],
+      updatedAt: demoPreferenceProfile.updatedAt + 1,
+    });
+
+    await setExperienceMode("personal");
+
+    const personalProfile = await db.preferenceProfiles.get("default");
+    expect(personalProfile).toMatchObject({
+      provenance: "personal",
+      softPreferences: [{ key: "manual-note", value: "soft textures", strength: "soft", polarity: "prefer" }],
+      hardAvoids: [],
+      preferredMetals: [],
+      styleAnchors: [],
+    });
+    expect(personalProfile?.preferenceNotes.lessOf).toEqual([]);
+  });
+
+  it("materializes only explicit canonical signals from a demo-derived profile", async () => {
+    await seedWardrobe(demoWardrobe, { explicit: true });
+    const explicit = applyPreferenceDelta({
+      profile: createNeutralPreferenceProfile(1),
+      delta: preferenceDeltaForOption("more-soft"),
+      source: "explicit_voice",
+      now: 2,
+    });
+    await db.preferenceProfiles.put({
+      ...demoPreferenceProfile,
+      schemaVersion: 2,
+      preferenceSignals: explicit.preferenceSignals,
+    });
+
+    await setExperienceMode("personal");
+
+    const personal = await db.preferenceProfiles.get("default");
+    expect(personal).toMatchObject({ provenance: "personal", styleFeedback: [], preferredMetals: [] });
+    expect(personal?.preferenceSignals?.filter((signal) => signal.status === "active")).toEqual([
+      expect.objectContaining({ label: "Soft textures", provenance: expect.objectContaining({ source: "explicit_voice" }) }),
+    ]);
+    expect(personal?.preferenceSignals?.some((signal) => signal.provenance.source === "calibration_pairwise")).toBe(false);
   });
 });

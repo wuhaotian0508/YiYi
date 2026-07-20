@@ -146,9 +146,9 @@ test("Today gesture or visible control reaches Wardrobe and the sound preference
   await page.goto("/today");
   if (browserName === "webkit") {
     // Playwright WebKit does not synthesize a continuous trusted touch-drag stream.
-    await page.getByRole("link", { name: "Open wardrobe" }).click();
+    await page.getByRole("button", { name: "Open wardrobe" }).click();
   } else {
-    const surface = await page.locator("main").boundingBox();
+    const surface = await page.locator(".today-wardrobe-pager").boundingBox();
     if (!surface) throw new Error("Today surface missing");
     const startX = surface.x + surface.width * .84;
     const endX = surface.x + surface.width * .10;
@@ -158,8 +158,9 @@ test("Today gesture or visible control reaches Wardrobe and the sound preference
     await page.mouse.move(endX, dragY + 5, { steps: 6 });
     await page.mouse.up();
   }
-  await expect(page).toHaveURL(/\/wardrobe$/);
-  await page.getByRole("link", { name: "Back to Today" }).click();
+  await expect(page.getByRole("heading", { name: "My wardrobe" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to Today" }).click();
+  await expect(page.getByRole("button", { name: "Open wardrobe" })).toBeVisible();
   await page.getByRole("link", { name: "Open settings" }).click();
   const sounds = page.getByRole("switch", { name: "Interface sounds" });
   await expect(sounds).toBeChecked();
@@ -180,15 +181,14 @@ test("wardrobe search, availability, and visible preference editing work", async
   await expect(page.getByText("Unavailable", { exact: true })).toBeVisible();
 
   await page.goto("/preferences");
-  const avoidSection = page.locator(".memory-section").filter({ hasText: "Usually avoid" });
+  const avoidSection = page.getByRole("region", { name: "Less of" });
   await avoidSection.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("textbox", { name: "New saved preference" }).fill("neon colors");
-  await page.getByRole("button", { name: "Add memory" }).click();
-  await expect(page.getByText("neon colors", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Done editing" }).click();
+  await page.getByRole("button", { name: "Add for review" }).click();
+  await expect(page.getByRole("region", { name: "Needs review" })).toContainText("neon colors");
   await page.goto("/today");
   await page.goto("/preferences");
-  await expect(page.getByText("neon colors", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Needs review" })).toContainText("neon colors");
 });
 
 test("mock image processing saves Blob-backed clothing", async ({ page, browserName }) => {

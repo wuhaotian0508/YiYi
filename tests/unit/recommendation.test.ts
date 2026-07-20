@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { calibrationCatalogV2 } from "@/domain/preferences/calibration-catalog";
+import { buildCalibrationPreferenceProfile, createCalibrationResponse } from "@/domain/preferences/calibration-engine";
 import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
 import { saveUnstructuredVoicePreference, updateProfileFromOutfitFeedback } from "@/domain/preferences/feedback";
+import { activeLongTermPreferenceSignals, applyPreferenceDelta, removePreferenceSignal } from "@/domain/preferences/profile-mutations";
 import { createRecommendationContext, RecommendationError } from "@/domain/recommendation/context";
 import { validateOutfit } from "@/domain/recommendation/constraints";
 import { changedAndPreserved, runRecommendationDecision, validateRankingReferences, validateSelectedId } from "@/domain/recommendation/engine";
 import { matchesSoftPreference, normalizedWeightsFor, outfitComfortPerformance, outfitSimilarity, outfitThermalPerformance, scoreCandidate } from "@/domain/recommendation/scoring";
-import { IntentDeltaSchema, PreferenceRuleSchema, type IntentDelta, type WardrobeItem } from "@/domain/schemas";
+import { IntentDeltaSchema, PreferenceDeltaSchema, PreferenceRuleSchema, type IntentDelta, type PreferenceDelta, type WardrobeItem } from "@/domain/schemas";
 import { demoIntent, demoPreferenceProfile, demoWardrobe } from "@/mocks/wardrobe";
 
 const rain = { minApparentTempC: 8, maxApparentTempC: 13, precipitationProbability: 80, expectedRain: true, windy: true, summary: "Cold rain", sourceTimestamp: 1_721_088_000_000 };
@@ -13,6 +16,10 @@ const zeroAdjustments = { formality: 0, warmth: 0, comfort: 0, colorfulness: 0, 
 
 function delta(input: Partial<IntentDelta> & Pick<IntentDelta, "operation" | "rawUtterance">): IntentDelta {
   return IntentDeltaSchema.parse({ targetSlots: [], preserveSlots: [], requiredItemIds: [], excludedItemIds: [], excludedCategories: [], adjustments: zeroAdjustments, desiredStyleTags: [], undesiredStyleTags: [], confidence: 1, ambiguity: [], ...input });
+}
+
+function preferenceDelta(input: Partial<PreferenceDelta> = {}): PreferenceDelta {
+  return PreferenceDeltaSchema.parse({ action: "add", signalId: null, attribute: "style", value: "polished", label: "Polished", polarity: "more", strength: "soft", scope: "global_style", categories: [], slots: [], combinationValues: [], confidence: 0.9, needsReview: false, evidenceSummary: null, ...input });
 }
 
 function addedItem(id: string, category: WardrobeItem["category"], subtype: string, options: Partial<WardrobeItem> = {}): WardrobeItem {
@@ -92,7 +99,7 @@ describe("constraint-first recommendation", () => {
   });
 
   it("enforces explicit hard avoids in deterministic fallback as a canonical constraint", () => {
-    const profile = { ...createNeutralPreferenceProfile(), hardAvoids: [{ key: "voice", value: "Never wear brown bags", strength: "hard" as const, polarity: "avoid" as const }] };
+    const profile = applyPreferenceDelta({ profile: createNeutralPreferenceProfile(), delta: preferenceDelta({ attribute: "color", value: "brown", label: "Brown bags", polarity: "less", strength: "hard", categories: ["bag"], slots: ["bag"] }) });
     const decision = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile, weather: null, operation: "fallback" });
     const brownBagIds = demoWardrobe.filter((item) => item.category === "bag" && item.primaryColor === "brown").map((item) => item.id);
     expect(decision.candidates.every((candidate) => !brownBagIds.includes(candidate.itemIds.bag ?? ""))).toBe(true);
@@ -119,11 +126,25 @@ describe("constraint-first recommendation", () => {
   });
 
   it("uses personalization semantics to change ranking direction", () => {
-    const polished = { ...createNeutralPreferenceProfile(), softPreferences: [{ key: "style", value: "polished", strength: "soft" as const, polarity: "prefer" as const }] };
-    const relaxed = { ...createNeutralPreferenceProfile(), softPreferences: [{ key: "style", value: "relaxed", strength: "soft" as const, polarity: "prefer" as const }] };
+    const polished = applyPreferenceDelta({ profile: createNeutralPreferenceProfile(), delta: preferenceDelta({ value: "polished", label: "Polished" }) });
+    const relaxed = applyPreferenceDelta({ profile: createNeutralPreferenceProfile(), delta: preferenceDelta({ value: "relaxed", label: "Relaxed" }) });
     const polishedTop = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: polished, weather: null, operation: "initial" }).deterministicAnswer.itemIds.top;
     const relaxedTop = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: relaxed, weather: null, operation: "initial" }).deterministicAnswer.itemIds.top;
     expect(polishedTop).not.toBe(relaxedTop);
+  });
+
+  it("does not turn wardrobe presentation direction into stereotyped style scoring", () => {
+    const profile = applyPreferenceDelta({ profile: createNeutralPreferenceProfile(), delta: preferenceDelta({ value: "polished", label: "Polished" }) });
+    const answers = (["womenswear", "menswear", "mixed", "neutral"] as const).map((wardrobeDirection) => runRecommendationDecision({
+      wardrobe: demoWardrobe,
+      intent: demoIntent,
+      profile: { ...profile, wardrobeDirection },
+      weather: null,
+      operation: "initial",
+      requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    }).deterministicAnswer);
+    expect(new Set(answers.map((answer) => answer.id))).toEqual(new Set([answers[0].id]));
+    expect(new Set(answers.map((answer) => answer.deterministicScore))).toEqual(new Set([answers[0].deterministicScore]));
   });
 
   it("maps every structured onboarding Less of option to real wardrobe attributes", () => {
@@ -151,12 +172,42 @@ describe("constraint-first recommendation", () => {
     const withGold = decision.candidates.find((candidate) => candidate.itemIds.jewelry === demoWardrobe.find((item) => item.metal === "gold")?.id)!;
     expect(withGold).toBeDefined();
     const baseline = scoreCandidate(withGold.itemIds, decision.context).scoreTrace!.dimensions.personalFit;
-    const avoidsGold = {
-      ...profile,
-      softPreferences: [{ key: "onboarding", value: "gold-tone jewelry", strength: "soft" as const, polarity: "avoid" as const }],
-    };
+    const avoidsGold = applyPreferenceDelta({ profile, delta: preferenceDelta({ attribute: "metal", value: "gold", label: "Gold-tone jewelry", polarity: "less", categories: ["jewelry"], slots: ["jewelry"] }) });
     const avoidContext = createRecommendationContext({ wardrobe: demoWardrobe, intent: demoIntent, profile: avoidsGold, weather: null, operation: "initial" });
     expect(scoreCandidate(withGold.itemIds, avoidContext).scoreTrace!.dimensions.personalFit).toBeLessThan(baseline);
+  });
+
+  it("makes an explicit Neither response penalize matching full-look semantics without inventing an opposite style", () => {
+    const relaxedQuestion = calibrationCatalogV2.questions[0];
+    const profile = buildCalibrationPreferenceProfile({
+      direction: "neutral",
+      responses: [createCalibrationResponse(relaxedQuestion.id, "neither", 1_750_000_000_000)],
+      now: 1_750_000_000_001,
+    });
+    const relaxedOutfit = {
+      top: "22222222-2222-4222-8222-222222222222",
+      bottom: "33333333-3333-4333-8333-333333333331",
+      shoes: "44444444-4444-4444-8444-444444444441",
+      bag: "55555555-5555-4555-8555-555555555552",
+    };
+    const neutralContext = createRecommendationContext({
+      wardrobe: demoWardrobe,
+      intent: demoIntent,
+      profile: createNeutralPreferenceProfile(),
+      weather: null,
+      operation: "initial",
+    });
+    const calibratedContext = createRecommendationContext({
+      wardrobe: demoWardrobe,
+      intent: demoIntent,
+      profile,
+      weather: null,
+      operation: "initial",
+    });
+    const baseline = scoreCandidate(relaxedOutfit, neutralContext).scoreTrace!.dimensions.personalFit;
+    const calibrated = scoreCandidate(relaxedOutfit, calibratedContext).scoreTrace!.dimensions.personalFit;
+
+    expect(calibrated).toBeLessThan(baseline - 0.02);
   });
 
   it("avoids session repeats until unseen legal answers are exhausted", () => {
@@ -218,7 +269,8 @@ describe("constraint-first recommendation", () => {
   it("stores unsafe free-form voice preferences as notes instead of expanding them into hard bans", () => {
     const updated = saveUnstructuredVoicePreference({ profile: createNeutralPreferenceProfile(), rule: "I do not like black and white together", polarity: "avoid", evidencePhrase: "I usually avoid black and white together", now: 1 });
     expect(updated.hardAvoids).toEqual([]);
-    expect(updated.softPreferences).toContainEqual(expect.objectContaining({ key: "voice-note", strength: "soft", polarity: "avoid" }));
+    expect(updated.softPreferences).toEqual([]);
+    expect(updated.preferenceSignals).toContainEqual(expect.objectContaining({ attribute: "preference_note", status: "needs_review", polarity: "less" }));
     const decision = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: updated, weather: null, operation: "initial" });
     expect(decision.candidates.some((candidate) => Object.values(candidate.itemIds).some((id) => demoWardrobe.find((item) => item.id === id)?.primaryColor === "black"))).toBe(true);
     expect(decision.candidates.some((candidate) => Object.values(candidate.itemIds).some((id) => demoWardrobe.find((item) => item.id === id)?.primaryColor === "white"))).toBe(true);
@@ -227,8 +279,8 @@ describe("constraint-first recommendation", () => {
   it("does not learn a one-day aesthetic term as a stable confirmation preference", () => {
     const profile = createNeutralPreferenceProfile();
     const outfit = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile, weather: null, operation: "initial" }).deterministicAnswer;
-    const learned = updateProfileFromOutfitFeedback({ profile, outfit, wardrobe: demoWardrobe, kind: "confirmed", intent: { ...demoIntent, aestheticTerms: ["polished", "relaxed", "clean"] }, now: 1 });
-    const tags = learned.styleAnchors.flatMap((anchor) => Object.keys(anchor.styleTags));
+    const learned = updateProfileFromOutfitFeedback({ profile, outfit, wardrobe: demoWardrobe, kind: "confirmed", intent: { ...demoIntent, aestheticTerms: ["polished", "relaxed", "clean"] }, contextId: "day-one", now: 1 });
+    const tags = (learned.preferenceSignals ?? []).filter((signal) => signal.provenance.source === "confirmation").map((signal) => signal.value);
     expect(tags).not.toContain("polished");
     expect(tags).not.toContain("relaxed");
     expect(tags).not.toContain("clean");
@@ -238,12 +290,38 @@ describe("constraint-first recommendation", () => {
     const neutral = createNeutralPreferenceProfile();
     const outfit = runRecommendationDecision({ wardrobe: demoWardrobe, intent: { ...demoIntent, aestheticTerms: [] }, profile: neutral, weather: null, operation: "initial" }).deterministicAnswer;
     let learned = neutral;
-    for (let index = 0; index < 3; index += 1) learned = updateProfileFromOutfitFeedback({ profile: learned, outfit, wardrobe: demoWardrobe, kind: "confirmed", intent: { ...demoIntent, aestheticTerms: [] }, now: index + 1 });
+    for (let index = 0; index < 3; index += 1) learned = updateProfileFromOutfitFeedback({ profile: learned, outfit, wardrobe: demoWardrobe, kind: "confirmed", intent: { ...demoIntent, aestheticTerms: [] }, contextId: `session-${index + 1}`, now: index + 1 });
     const baselineContext = createRecommendationContext({ wardrobe: demoWardrobe, intent: { ...demoIntent, aestheticTerms: [] }, profile: neutral, weather: null, operation: "initial" });
     const learnedContext = createRecommendationContext({ wardrobe: demoWardrobe, intent: { ...demoIntent, aestheticTerms: [] }, profile: learned, weather: null, operation: "initial" });
     const baseline = scoreCandidate(outfit.itemIds, baselineContext).scoreTrace!.dimensions.personalFit;
     const after = scoreCandidate(outfit.itemIds, learnedContext).scoreTrace!.dimensions.personalFit;
     expect(after).toBeGreaterThan(baseline);
+  });
+
+  it("keeps one confirmation contextual and promotes only repeated evidence from distinct contexts", () => {
+    const neutral = createNeutralPreferenceProfile();
+    const outfit = runRecommendationDecision({ wardrobe: demoWardrobe, intent: { ...demoIntent, aestheticTerms: [] }, profile: neutral, weather: null, operation: "initial" }).deterministicAnswer;
+    const baselineContext = createRecommendationContext({ wardrobe: demoWardrobe, intent: { ...demoIntent, aestheticTerms: [] }, profile: neutral, weather: null, operation: "initial" });
+    const baseline = scoreCandidate(outfit.itemIds, baselineContext).scoreTrace!.dimensions.personalFit;
+
+    const once = updateProfileFromOutfitFeedback({ profile: neutral, outfit, wardrobe: demoWardrobe, kind: "confirmed", intent: { ...demoIntent, aestheticTerms: [] }, contextId: "same-session", now: 1 });
+    const sameContext = updateProfileFromOutfitFeedback({ profile: once, outfit, wardrobe: demoWardrobe, kind: "confirmed", intent: { ...demoIntent, aestheticTerms: [] }, contextId: "same-session", now: 2 });
+    expect(activeLongTermPreferenceSignals(once)).toEqual([]);
+    expect(activeLongTermPreferenceSignals(sameContext)).toEqual([]);
+    expect(scoreCandidate(outfit.itemIds, createRecommendationContext({ wardrobe: demoWardrobe, intent: { ...demoIntent, aestheticTerms: [] }, profile: sameContext, weather: null, operation: "initial" })).scoreTrace!.dimensions.personalFit).toBeCloseTo(baseline, 12);
+
+    const secondContext = updateProfileFromOutfitFeedback({ profile: sameContext, outfit, wardrobe: demoWardrobe, kind: "confirmed", intent: { ...demoIntent, aestheticTerms: [] }, contextId: "different-session", now: 3 });
+    expect(activeLongTermPreferenceSignals(secondContext).some((signal) => signal.provenance.source === "confirmation")).toBe(true);
+    expect(scoreCandidate(outfit.itemIds, createRecommendationContext({ wardrobe: demoWardrobe, intent: { ...demoIntent, aestheticTerms: [] }, profile: secondContext, weather: null, operation: "initial" })).scoreTrace!.dimensions.personalFit).toBeGreaterThan(baseline);
+
+    let forgotten = secondContext;
+    for (const signal of activeLongTermPreferenceSignals(secondContext).filter((entry) => entry.provenance.source === "confirmation")) {
+      forgotten = removePreferenceSignal({ profile: forgotten, signalId: signal.id, now: 4 });
+    }
+    expect(activeLongTermPreferenceSignals(forgotten)).toEqual([]);
+    expect(forgotten.preferenceSignals?.filter((signal) => signal.provenance.source === "confirmation" && signal.permanence === "contextual").every((signal) => signal.status === "deleted")).toBe(true);
+    const oneNewContext = updateProfileFromOutfitFeedback({ profile: forgotten, outfit, wardrobe: demoWardrobe, kind: "confirmed", intent: { ...demoIntent, aestheticTerms: [] }, contextId: "third-session", now: 5 });
+    expect(activeLongTermPreferenceSignals(oneNewContext)).toEqual([]);
   });
 
   it("uses perceptual outfit features in random-distance comparisons", () => {

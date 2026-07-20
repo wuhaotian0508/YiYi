@@ -1,0 +1,26 @@
+{
+  "version": "pairwise-calibration-v2",
+  "catalogVersion": 2,
+  "scenarios": [
+    {
+      "id": "all-both",
+      "choices": ["both", "both", "both", "both", "both", "both"],
+      "expected": { "more": 12, "less": 0, "unknown": 0, "differentiation": 0, "overall": 0.2333333333333333 }
+    },
+    {
+      "id": "all-skip",
+      "choices": ["skip", "skip", "skip", "skip", "skip", "skip"],
+      "expected": { "more": 0, "less": 0, "unknown": 0, "differentiation": 0, "overall": 0 }
+    },
+    {
+      "id": "relative-winners",
+      "choices": ["a", "b", "a", "b", "a", "b"],
+      "expected": { "more": 6, "less": 0, "unknown": 6, "differentiation": 1, "overall": 0.6666666666666666 }
+    },
+    {
+      "id": "explicit-neither",
+      "choices": ["neither", "skip", "skip", "skip", "skip", "skip"],
+      "expected": { "more": 0, "less": 2, "unknown": 0, "differentiation": 0, "overall": 0.05833333333333333 }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "date": "2026-07-20",
+  "environment": "local production-compatible Next server with mock providers",
+  "scenarios": {
+    "weatherConcurrent": { "requests": 24, "failures": 0, "p95Ms": 53.61, "maxMs": 56.91 },
+    "realtimeTokenBurst": { "requests": 12, "mockModeResponses": 10, "rateLimitedResponses": 2, "retryAfterPresent": true }
+  },
+  "evidence": "tests/e2e/release-load.spec.ts"
+}

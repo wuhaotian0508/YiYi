@@ -1,0 +1,21 @@
+{
+  "status": "pass",
+  "counterexamplesFound": 1,
+  "counterexamplesFixed": 1,
+  "focused": {
+    "voiceCoordinator": "10/10 passed",
+    "mutationAndVoiceRace": "24/24 passed",
+    "propertySuites": "26/26 passed"
+  },
+  "fullGate": {
+    "lint": "pass",
+    "typecheck": "pass",
+    "unit": "29 files, 178 tests passed",
+    "build": "pass"
+  },
+  "newRaceEvidence": {
+    "sameBaseConcurrentCommits": "exactly one committed; loser STALE_OPERATION; no orphan OutfitVersion",
+    "interruptedSessionWrite": "transaction rolled back OutfitVersion and DailySession",
+    "failureWithoutStateEvent": "adapter disconnected exactly once and explicit retry created a fresh session"
+  }
+}

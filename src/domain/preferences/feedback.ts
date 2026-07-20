@@ -1,16 +1,39 @@
-import { PreferenceProfileSchema, type DailyIntent, type Outfit, type PreferenceProfile, type WardrobeItem } from "@/domain/schemas";
+import { applyPreferenceDelta, rebuildProfileFromSignals } from "@/domain/preferences/profile-mutations";
+import { PreferenceDeltaSchema, PreferenceProfileSchema, PreferenceSignalSchema, type DailyIntent, type Outfit, type PreferenceProfile, type WardrobeItem } from "@/domain/schemas";
 
 const learnableStyleTags = new Set(["classic", "clean", "cool", "delicate", "expressive", "feminine", "minimal", "modern", "polished", "refined", "relaxed", "soft", "sporty", "statement", "tailored", "timeless", "utility"]);
 
+function stableHash(value: string) {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 export function saveUnstructuredVoicePreference(input: { profile: PreferenceProfile; rule: string; polarity: "prefer" | "avoid"; evidencePhrase: string; now?: number }) {
   const now = input.now ?? Date.now();
-  const note = { key: "voice-note", value: input.rule.trim().toLowerCase(), strength: "soft" as const, polarity: input.polarity };
-  return PreferenceProfileSchema.parse({
-    ...input.profile,
-    provenance: "personal",
-    softPreferences: [...input.profile.softPreferences.filter((rule) => !(rule.key === note.key && rule.value === note.value)), note].slice(-40),
-    evidence: [...input.profile.evidence, { phrase: input.evidencePhrase, source: "explicit_voice" as const, createdAt: now }].slice(-100),
-    updatedAt: now,
+  return applyPreferenceDelta({
+    profile: input.profile,
+    delta: PreferenceDeltaSchema.parse({
+      action: "add",
+      signalId: null,
+      attribute: "preference_note",
+      value: input.rule.trim().toLowerCase(),
+      label: input.rule.trim(),
+      polarity: input.polarity === "avoid" ? "less" : "more",
+      strength: "soft",
+      scope: "global_style",
+      categories: [],
+      slots: [],
+      combinationValues: [],
+      confidence: 0.5,
+      needsReview: true,
+      evidenceSummary: input.evidencePhrase,
+    }),
+    now,
+    source: "explicit_voice",
   });
 }
 
@@ -20,6 +43,7 @@ export function updateProfileFromOutfitFeedback(input: {
   wardrobe: WardrobeItem[];
   kind: "confirmed";
   intent?: DailyIntent;
+  contextId?: string;
   now?: number;
 }) {
   const now = input.now ?? Date.now();
@@ -34,22 +58,68 @@ export function updateProfileFromOutfitFeedback(input: {
     source: "confirmation" as const,
     createdAt: now,
   };
-  const existing = input.profile.styleAnchors.find((anchor) => anchor.id === "learned-confirmed");
-  const count = (existing?.evidenceCount ?? 0) + 1;
-  const styleTags = { ...(existing?.styleTags ?? {}) };
-  for (const tag of tags) styleTags[tag] = Math.min(1, (styleTags[tag] ?? 0) * 0.88 + 0.12);
-  const anchor = {
-    id: "learned-confirmed",
-    label: "Outfits you wear",
-    vector: existing?.vector ?? input.profile.styleVector,
-    styleTags,
-    evidenceCount: count,
-    confidence: Math.min(0.82, 0.12 + count * 0.1),
-    updatedAt: now,
-  };
+  const existingSignals = input.profile.preferenceSignals ?? [];
+  const contextId = input.contextId?.trim().slice(0, 160) || "unknown-context";
+  const contextualSignals = tags.map((tag) => {
+    const id = `confirmation:context:${stableHash(contextId)}:style:${tag}`;
+    return PreferenceSignalSchema.parse({
+      id,
+      attribute: "style",
+      value: tag,
+      label: tag.replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()),
+      polarity: "more",
+      strength: "soft",
+      confidence: 0.18,
+      scope: "contextual",
+      categories: [],
+      slots: [],
+      permanence: "contextual",
+      editable: true,
+      status: "active",
+      combinationValues: [],
+      styleTags: [tag],
+      provenance: { source: "confirmation", sourceId: contextId, createdAt: now },
+    });
+  });
+  const withContext = [...existingSignals.filter((signal) => !contextualSignals.some((next) => next.id === signal.id)), ...contextualSignals];
+  const learnedSignals = tags.flatMap((tag) => {
+    const sourceIds = new Set(withContext
+      .filter((signal) => signal.provenance.source === "confirmation"
+        && signal.attribute === "style"
+        && signal.value === tag
+        && signal.status === "active"
+        && signal.permanence === "contextual"
+        && signal.provenance.sourceId)
+      .map((signal) => signal.provenance.sourceId!)
+      .filter((sourceId) => sourceId !== "unknown-context"));
+    if (sourceIds.size < 2) return [];
+    const id = `confirmation:learned:style:${tag}`;
+    return [PreferenceSignalSchema.parse({
+      id,
+      attribute: "style",
+      value: tag,
+      label: tag.replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()),
+      polarity: "more",
+      strength: "soft",
+      confidence: Math.min(0.7, 0.18 + sourceIds.size * 0.12),
+      scope: "global_style",
+      categories: [],
+      slots: [],
+      permanence: "long_term",
+      editable: true,
+      status: "active",
+      combinationValues: [],
+      styleTags: [tag],
+      provenance: { source: "confirmation", sourceId: `cross-context:${stableHash([...sourceIds].sort().join("|"))}`, createdAt: now },
+    })];
+  });
+  const nextSignals = [
+    ...withContext.filter((signal) => !learnedSignals.some((next) => next.id === signal.id)),
+    ...learnedSignals,
+  ];
   return PreferenceProfileSchema.parse({
-    ...input.profile,
-    styleAnchors: [...input.profile.styleAnchors.filter((entry) => entry.id !== anchor.id), anchor].slice(-4),
+    ...rebuildProfileFromSignals({ profile: input.profile, signals: nextSignals, now }),
+    origin: learnedSignals.length > 0 ? "learned" : input.profile.origin,
     evidence: [...input.profile.evidence, evidence].slice(-100),
     provenance: "personal",
     updatedAt: now,

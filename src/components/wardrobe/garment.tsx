@@ -27,6 +27,10 @@ const spriteIndexById: Record<string, number> = {
   "77777777-7777-4777-8777-777777777772": 15,
 };
 
+const cleanDemoAssetById: Partial<Record<string, string>> = {
+  "44444444-4444-4444-8444-444444444441": "/demo-wardrobe/white-sneakers-clean.webp",
+};
+
 export function Garment({ item, className = "" }: { item: WardrobeItem; className?: string }) {
   const imageSet = useLiveQuery(() => db.itemImages.get(item.id), [item.id]);
   const [localSource, setLocalSource] = useState<string | null>(null);
@@ -36,7 +40,9 @@ export function Garment({ item, className = "" }: { item: WardrobeItem; classNam
     const frame = window.requestAnimationFrame(() => setLocalSource(source));
     return () => { window.cancelAnimationFrame(frame); URL.revokeObjectURL(source); };
   }, [imageSet]);
-  if (localSource) return <Image unoptimized aria-hidden="true" alt="" src={localSource} width={126} height={126} className={`garment-local ${className}`} />;
+  if (localSource) return <span aria-hidden="true" className={`garment-local ${className}`}><Image unoptimized alt="" src={localSource} fill sizes="126px" /></span>;
+  const cleanDemoAsset = cleanDemoAssetById[item.id];
+  if (cleanDemoAsset) return <span aria-hidden="true" className={`garment-demo-asset ${className}`}><Image alt="" src={cleanDemoAsset} fill sizes="126px" /></span>;
   const spriteIndex = spriteIndexById[item.id];
   const shapeCategory = ["top", "outerwear", "bottom", "shoes", "bag", "jewelry", "headwear", "eyewear", "one_piece"].includes(item.category) ? item.category : "jewelry";
   if (spriteIndex !== undefined) {

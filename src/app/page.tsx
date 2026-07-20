@@ -2,135 +2,77 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
-import { ArrowLeft, Check, Heart, Mic, RotateCcw, ThumbsDown, X } from "lucide-react";
+import { AnimatePresence, motion, useIsPresent, useReducedMotionConfig } from "motion/react";
+import { ArrowLeft, Check, Mic } from "lucide-react";
 import { YiYiMark } from "@/components/brand/yiyi-mark";
-import { OutfitCanvas } from "@/components/outfit/outfit-canvas";
+import {
+  CalibrationProfileReview,
+  lastAnsweredCalibrationIndex,
+  OnboardingCalibration,
+} from "@/components/calibration/onboarding-calibration";
+import { EditablePreferenceSignals, FineTuneVoice } from "@/components/preferences/fine-tune-voice";
+import { ConversationalOnboarding } from "@/components/onboarding/conversational-onboarding";
 import { PrimaryButton, SecondaryButton } from "@/components/ui/buttons";
-import { VoiceCore } from "@/components/voice/voice-core";
 import { copy } from "@/content/copy";
 import { buildPreferenceProfile } from "@/domain/preferences/calibration";
-import { OutfitSchema, type Outfit, type StyleFeedback, type WardrobeDirection } from "@/domain/schemas";
+import { lessPreferenceOptions, morePreferenceOptions, preferenceDeltaForOption, type ExplicitPreferenceOption } from "@/domain/preferences/explicit-options";
+import { applyPreferenceDelta, rebuildProfileFromSignals, removePreferenceSignal } from "@/domain/preferences/profile-mutations";
+import { type CalibrationResponse, type PreferenceDelta, type PreferenceProfile, type PreferenceSignal, type WardrobeDirection } from "@/domain/schemas";
 import { unlockSounds } from "@/lib/audio/sound-system";
 import { calmSpring } from "@/lib/motion/tokens";
 import { requestPersistentStorage, savePreferences, seedWardrobe, setExperienceMode } from "@/lib/storage/db";
 import { demoWardrobe } from "@/mocks/wardrobe";
 
-type Stage = "splash" | "teach" | "understand" | "recommend" | "permission" | "denied" | "direction" | "calibrate" | "preferences" | "profile" | "setup";
-type Sentiment = StyleFeedback["sentiment"];
-type VoiceCaptureState = "idle" | "listening" | "understanding" | "done" | "error";
+type Stage = "intro" | "permission" | "denied" | "direction" | "calibrate" | "preferences" | "profile" | "setup";
 
 const directions: { id: WardrobeDirection; title: string; body: string }[] = [
-  { id: "womenswear", title: "Womenswear", body: "Style primarily from womenswear silhouettes." },
-  { id: "menswear", title: "Menswear", body: "Style primarily from menswear silhouettes." },
-  { id: "mixed", title: "Mix both", body: "Move freely across both directions." },
-  { id: "neutral", title: "No preference", body: "Let the wardrobe and your day lead." },
+  { id: "womenswear", title: "Womenswear", body: "Most clothes I plan to add are womenswear." },
+  { id: "menswear", title: "Menswear", body: "Most clothes I plan to add are menswear." },
+  { id: "mixed", title: "Mix both", body: "My wardrobe moves across both directions." },
+  { id: "neutral", title: "No label", body: "Use the clothes I add without a wardrobe label." },
 ];
-const moreOptions = ["Relaxed tailoring", "Clean layers", "Sporty pieces", "Soft textures", "Color", "Minimal looks"];
-const lessOptions = ["Heels", "Tight fits", "Cropped tops", "Short skirts", "Bright colors", "Formal looks", "Gold-tone jewelry", "Silver-tone jewelry"];
-const looks = [0, 1, 2, 3, 4, 5];
-
-const recommendationBefore: Outfit = OutfitSchema.parse({
-  id: "88888888-8888-4888-8888-888888888881",
-  itemIds: {
-    outerwear: "11111111-1111-4111-8111-111111111113",
-    top: "22222222-2222-4222-8222-222222222223",
-    bottom: "33333333-3333-4333-8333-333333333332",
-    shoes: "44444444-4444-4444-8444-444444444442",
-    bag: "55555555-5555-4555-8555-555555555551",
-  },
-  deterministicScore: 9,
-});
-const recommendationAfter: Outfit = OutfitSchema.parse({
-  ...recommendationBefore,
-  id: "88888888-8888-4888-8888-888888888882",
-  itemIds: { ...recommendationBefore.itemIds, shoes: "44444444-4444-4444-8444-444444444441" },
-});
-
-function lookPosition(index: number, direction: WardrobeDirection) {
-  const menswear = direction === "menswear" || (direction === "mixed" && index % 2 === 1) || (direction === "neutral" && index >= 3);
-  return {
-    "--look-x": `${(index % 3) * 50}%`,
-    "--look-y": `${Math.floor(index / 3) * 100}%`,
-    "--look-image": `url('/style-calibration/${menswear ? "style-grid-menswear.webp" : "style-grid.webp"}')`,
-  } as React.CSSProperties;
-}
-
-function useNarrativeSteps(delays: number[]) {
-  const reduceMotion = useReducedMotion();
-  const [step, setStep] = useState(0);
-  useEffect(() => {
-    if (reduceMotion) return;
-    const timers = delays.map((delay, index) => window.setTimeout(() => setStep(index + 1), delay));
-    return () => timers.forEach(window.clearTimeout);
-  }, [delays, reduceMotion]);
-  return reduceMotion ? delays.length : step;
-}
-
-type SpeechResultEvent = { results: ArrayLike<{ 0: { transcript: string } }> };
-type SpeechRecognitionLike = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start(): void;
-  stop(): void;
-  onresult: ((event: SpeechResultEvent) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-};
-type SpeechRecognitionWindow = Window & typeof globalThis & {
-  SpeechRecognition?: new () => SpeechRecognitionLike;
-  webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-};
-
-function usePreferenceVoice(onComplete: (text: string) => void) {
-  const [state, setState] = useState<VoiceCaptureState>("idle");
-  const [transcript, setTranscript] = useState("");
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  useEffect(() => () => recognitionRef.current?.stop(), []);
-
-  async function start() {
-    setTranscript("");
-    setState("listening");
-    await unlockSounds();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-      const speechWindow = window as SpeechRecognitionWindow;
-      const Constructor = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
-      if (!Constructor) throw new Error("Speech recognition unavailable");
-      const recognition = new Constructor();
-      recognition.lang = "en-US";
-      recognition.interimResults = false;
-      recognition.continuous = false;
-      recognition.onresult = (event) => {
-        const text = event.results[event.results.length - 1]?.[0]?.transcript?.trim() ?? "";
-        if (!text) { setState("error"); return; }
-        setTranscript(text);
-        setState("understanding");
-        window.setTimeout(() => { onComplete(text); setState("done"); }, 520);
-      };
-      recognition.onerror = () => setState("error");
-      recognition.onend = () => setState((value) => value === "listening" ? "error" : value);
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch {
-      setState("error");
-    }
-  }
-
-  return { state, transcript, start, retry: () => void start() };
-}
 
 export default function FirstRunPage() {
   const router = useRouter();
-  const [stage, setStage] = useState<Stage>("splash");
+  const [stage, setStage] = useState<Stage>("intro");
   const [direction, setDirection] = useState<WardrobeDirection>("neutral");
-  const [lookIndex, setLookIndex] = useState(0);
-  const [feedback, setFeedback] = useState<StyleFeedback[]>([]);
-  const [moreOf, setMoreOf] = useState<string[]>([]);
-  const [lessOf, setLessOf] = useState<string[]>([]);
-  const [freeform, setFreeform] = useState("");
+  const [calibrationQuestionIndex, setCalibrationQuestionIndex] = useState(0);
+  const [calibrationResponses, setCalibrationResponses] = useState<CalibrationResponse[]>([]);
+  const calibrationResponsesRef = useRef<CalibrationResponse[]>([]);
+  const calibrationHistoryRef = useRef<CalibrationResponse[][]>([]);
+  const [calibrationHistoryDepth, setCalibrationHistoryDepth] = useState(0);
+  const [calibrationPresentationSeed, setCalibrationPresentationSeed] = useState(0);
+  const calibrationPresentationSeedRef = useRef<number | null>(null);
+  const calibrationProfile = useMemo(() => buildPreferenceProfile({
+    direction,
+    responses: calibrationResponses,
+  }), [calibrationResponses, direction]);
+  const [profileDraft, setProfileDraft] = useState<PreferenceProfile>(calibrationProfile);
+  const profileDraftRef = useRef(profileDraft);
+  const preferenceMutationQueueRef = useRef<Promise<PreferenceProfile>>(Promise.resolve(profileDraft));
+  const pendingPreferenceMutationsRef = useRef(0);
+  const [preferenceSaving, setPreferenceSaving] = useState(false);
+  const [preferenceMutationError, setPreferenceMutationError] = useState(false);
+  const preferenceMutationErrorRef = useRef(false);
+  const finishingRef = useRef(false);
+  const [finishingMode, setFinishingMode] = useState<"demo" | "personal" | null>(null);
+  const [finishError, setFinishError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const previous = profileDraftRef.current;
+    const explicitSignals = (previous.preferenceSignals ?? [])
+      .filter((signal) => signal.provenance.source !== "calibration_pairwise");
+    const next = rebuildProfileFromSignals({
+      profile: {
+        ...calibrationProfile,
+        revision: Math.max(calibrationProfile.revision ?? 0, previous.revision ?? 0),
+        evidence: previous.evidence,
+      },
+      signals: [...(calibrationProfile.preferenceSignals ?? []), ...explicitSignals],
+    });
+    profileDraftRef.current = next;
+    setProfileDraft(next);
+  }, [calibrationProfile]);
 
   useEffect(() => {
     if (localStorage.getItem("yiyi:onboarding-complete") === "true") router.replace("/today");
@@ -146,120 +88,153 @@ export default function FirstRunPage() {
     } catch { setStage("denied"); }
   }
 
-  function recordFeedback(sentiment: Sentiment) {
-    const lookId = `look-${lookIndex + 1}`;
-    setFeedback((values) => [...values.filter((value) => value.lookId !== lookId), { lookId, sentiment }]);
-    if (lookIndex < looks.length - 1) setLookIndex((value) => value + 1);
-    else setStage("preferences");
-  }
-
-  function undoFeedback() {
-    const previous = feedback.at(-1);
+  function undoCalibrationAnswer() {
+    const previous = calibrationHistoryRef.current.at(-1);
     if (!previous) return;
-    setFeedback((values) => values.slice(0, -1));
-    setLookIndex(Math.max(0, Number(previous.lookId.split("-")[1]) - 1));
+    const current = calibrationResponsesRef.current;
+    const changedResponse = current.find((response) => {
+      const prior = previous.find((candidate) => candidate.questionId === response.questionId);
+      return !prior || prior.choice !== response.choice || prior.createdAt !== response.createdAt;
+    }) ?? previous.find((response) => !current.some((candidate) => candidate.questionId === response.questionId));
+    calibrationHistoryRef.current = calibrationHistoryRef.current.slice(0, -1);
+    calibrationResponsesRef.current = previous;
+    setCalibrationHistoryDepth(calibrationHistoryRef.current.length);
+    setCalibrationResponses(previous);
+    setCalibrationQuestionIndex(changedResponse ? lastAnsweredCalibrationIndex([changedResponse]) : lastAnsweredCalibrationIndex(previous));
     setStage("calibrate");
   }
 
-  function buildProfile() {
-    return buildPreferenceProfile({ direction, feedback, moreOf, lessOf, freeform });
+  function recordCalibrationResponses(next: CalibrationResponse[]) {
+    calibrationHistoryRef.current = [...calibrationHistoryRef.current, calibrationResponsesRef.current].slice(-50);
+    calibrationResponsesRef.current = next;
+    setCalibrationHistoryDepth(calibrationHistoryRef.current.length);
+    setCalibrationResponses(next);
+  }
+
+  function beginCalibration() {
+    if (calibrationPresentationSeedRef.current === null) {
+      const seed = window.crypto.getRandomValues(new Uint32Array(1))[0] & 1;
+      calibrationPresentationSeedRef.current = seed;
+      setCalibrationPresentationSeed(seed);
+    }
+    setStage("calibrate");
+  }
+
+  function persistProfileMutation(mutator: (profile: PreferenceProfile) => PreferenceProfile) {
+    pendingPreferenceMutationsRef.current += 1;
+    setPreferenceSaving(true);
+    preferenceMutationErrorRef.current = false;
+    setPreferenceMutationError(false);
+    const operation = preferenceMutationQueueRef.current
+      .catch(() => profileDraftRef.current)
+      .then(async () => {
+        const next = mutator(profileDraftRef.current);
+        await savePreferences(next);
+        profileDraftRef.current = next;
+        setProfileDraft(next);
+        return next;
+      });
+    preferenceMutationQueueRef.current = operation.catch(() => profileDraftRef.current);
+    void operation.catch(() => {
+      preferenceMutationErrorRef.current = true;
+      setPreferenceMutationError(true);
+    });
+    const finishPreferenceMutation = () => {
+      pendingPreferenceMutationsRef.current -= 1;
+      if (pendingPreferenceMutationsRef.current === 0) setPreferenceSaving(false);
+    };
+    void operation.then(finishPreferenceMutation, finishPreferenceMutation);
+    return operation;
+  }
+
+  function saveExplicitDelta(delta: PreferenceDelta) {
+    return persistProfileMutation((profile) => applyPreferenceDelta({ profile, delta, source: "explicit_voice" }));
+  }
+
+  function toggleExplicitOption(option: ExplicitPreferenceOption, selectedSignal: PreferenceSignal | undefined) {
+    const operation = selectedSignal
+      ? persistProfileMutation((profile) => removePreferenceSignal({ profile, signalId: selectedSignal.id, source: "profile_edit" }))
+      : persistProfileMutation((profile) => applyPreferenceDelta({ profile, delta: preferenceDeltaForOption(option.id), source: "profile_edit" }));
+    return operation.catch(() => profileDraftRef.current);
+  }
+
+  function removeExplicitSignal(signalId: string) {
+    return persistProfileMutation((profile) => removePreferenceSignal({ profile, signalId, source: "profile_edit" })).then(() => undefined, () => undefined);
   }
 
   async function finish(mode: "demo" | "personal") {
-    await setExperienceMode(mode, mode === "demo");
-    if (mode === "demo") await seedWardrobe(demoWardrobe, { explicit: true });
-    await savePreferences(buildProfile());
-    await requestPersistentStorage();
-    localStorage.setItem("yiyi:onboarding-complete", "true");
-    router.push(mode === "demo" ? "/today" : "/wardrobe/add");
+    if (finishingRef.current) return;
+    finishingRef.current = true;
+    setFinishingMode(mode);
+    setFinishError(null);
+    try {
+      await preferenceMutationQueueRef.current;
+      if (preferenceMutationErrorRef.current) throw new Error("A preference mutation failed before setup completion.");
+      await setExperienceMode(mode, mode === "demo");
+      if (mode === "demo") await seedWardrobe(demoWardrobe, { explicit: true });
+      await savePreferences(profileDraftRef.current);
+      await requestPersistentStorage();
+      localStorage.setItem("yiyi:onboarding-complete", "true");
+      router.push(mode === "demo" ? "/today" : "/wardrobe/add");
+    } catch {
+      setFinishError("Setup wasn’t saved. Your choices are still here — try again.");
+    } finally {
+      finishingRef.current = false;
+      setFinishingMode(null);
+    }
   }
 
   return (
     <main className="phone-page">
       <AnimatePresence initial={false} mode="popLayout">
-        {stage === "splash" && <Splash key="splash" onNext={() => setStage("teach")} />}
-        {stage === "teach" && <Teaching key="teach" onNext={() => setStage("understand")} />}
-        {stage === "understand" && <UnderstandingDemo key="understand" onNext={() => setStage("recommend")} />}
-        {stage === "recommend" && <RecommendationDemo key="recommend" onNext={() => setStage("permission")} />}
+        {stage === "intro" && <ConversationalOnboarding key="intro" onComplete={() => setStage("permission")} />}
         {(stage === "permission" || stage === "denied") && <Permission key={stage} denied={stage === "denied"} onAllow={requestMicrophone} />}
-        {stage === "direction" && <DirectionScreen key="direction" selected={direction} onChange={setDirection} onNext={() => setStage("calibrate")} />}
-        {stage === "calibrate" && <CalibrationScreen key={`look-${lookIndex}`} direction={direction} index={lookIndex} feedback={feedback} onFeedback={recordFeedback} onBack={() => lookIndex ? setLookIndex((value) => value - 1) : setStage("direction")} />}
-        {stage === "preferences" && <PreferenceScreen key="preferences" moreOf={moreOf} lessOf={lessOf} freeform={freeform} onMore={setMoreOf} onLess={setLessOf} onFreeform={setFreeform} onBack={() => { setLookIndex(looks.length - 1); setStage("calibrate"); }} onNext={() => setStage("profile")} />}
-        {stage === "profile" && <Profile key="profile" direction={direction} feedback={feedback} moreOf={moreOf} lessOf={lessOf} freeform={freeform} onBack={() => setStage("preferences")} onEdit={() => { setLookIndex(0); setStage("calibrate"); }} onUndo={undoFeedback} onNext={() => setStage("setup")} />}
-        {stage === "setup" && <WardrobeSetup key="setup" onBack={() => setStage("profile")} onExample={() => void finish("demo")} onPersonal={() => void finish("personal")} />}
+        {stage === "direction" && <DirectionScreen key="direction" selected={direction} onChange={setDirection} onNext={beginCalibration} />}
+        {stage === "calibrate" && <Screen key={`calibration-${calibrationQuestionIndex}`} className="calibration-screen"><OnboardingCalibration questionIndex={calibrationQuestionIndex} responses={calibrationResponses} presentationSeed={calibrationPresentationSeed} onQuestionIndexChange={setCalibrationQuestionIndex} onResponses={recordCalibrationResponses} onBack={() => setStage("direction")} onFinish={() => setStage("preferences")} /></Screen>}
+        {stage === "preferences" && <PreferenceScreen key="preferences" profile={profileDraft} saving={preferenceSaving} saveError={preferenceMutationError} onSaveDelta={saveExplicitDelta} onProfileChange={(profile) => { profileDraftRef.current = profile; setProfileDraft(profile); }} onToggleOption={toggleExplicitOption} onRemoveSignal={removeExplicitSignal} onBack={() => { setCalibrationQuestionIndex(lastAnsweredCalibrationIndex(calibrationResponses)); setStage("calibrate"); }} onNext={() => setStage("profile")} />}
+        {stage === "profile" && <Screen key="profile" className="profile-review"><CalibrationProfileReview direction={direction} profile={profileDraft} canUndo={calibrationHistoryDepth > 0} disabled={preferenceSaving} onBack={() => setStage("preferences")} onEdit={() => { setCalibrationQuestionIndex(0); setStage("calibrate"); }} onUndo={undoCalibrationAnswer} onNext={() => setStage("setup")} /></Screen>}
+        {stage === "setup" && <WardrobeSetup key="setup" busy={finishingMode !== null} error={finishError} onBack={() => setStage("profile")} onExample={() => void finish("demo")} onPersonal={() => void finish("personal")} />}
       </AnimatePresence>
     </main>
   );
 }
 
 function Screen({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = useReducedMotionConfig();
   const isPresent = useIsPresent();
   return <motion.section className={`page-column onboarding-screen ${className}`} aria-hidden={!isPresent} inert={!isPresent ? true : undefined} style={{ pointerEvents: isPresent ? "auto" : "none" }} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 14, scale: 0.995 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -10, scale: 0.998 }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{children}</motion.section>;
 }
 
-function Narrative({ show, children, className = "", delay = 0 }: { show: boolean; children: React.ReactNode; className?: string; delay?: number }) {
-  const reduceMotion = useReducedMotion();
-  return <AnimatePresence>{show && <motion.div className={className} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? 0.1 : 0.32, delay }}>{children}</motion.div>}</AnimatePresence>;
-}
-
-function Splash({ onNext }: { onNext: () => void }) {
-  const delays = useMemo(() => [280, 840, 2250], []);
-  const step = useNarrativeSteps(delays);
-  return <Screen className="splash-screen"><div className="center-stage splash-stage"><div><Narrative show={step >= 1}><h1 className="page-title">{copy.splash.title}</h1></Narrative><Narrative show={step >= 2}><div className="body-copy splash-subtitle"><span>{copy.splash.subtitleStart}</span><YiYiMark size={34} /><span>{copy.splash.subtitleEnd}</span></div></Narrative></div></div><Narrative show={step >= 3} className="bottom-bar"><PrimaryButton onClick={onNext}>Begin</PrimaryButton></Narrative></Screen>;
-}
-
-function Teaching({ onNext }: { onNext: () => void }) {
-  const delays = useMemo(() => [180, 620, 1250, 1980, 2660], []);
-  const step = useNarrativeSteps(delays);
-  return <Screen><header className="onboarding-heading"><Narrative show={step >= 1}><h1>{copy.tutorial.title}</h1></Narrative><Narrative show={step >= 2}><p>{copy.tutorial.subtitle}</p></Narrative></header><div className="teaching-sequence"><Narrative show={step >= 2} className="example-card bad"><span className="check-badge"><X size={15} /></span><div><div className="body-copy">{copy.tutorial.wrong}</div>{step >= 3 && <strong>{copy.tutorial.wrongLabel}</strong>}</div></Narrative><Narrative show={step >= 4} className="example-card good"><span className="check-badge"><Check size={15} /></span><div><div className="body-copy">{copy.tutorial.right}</div>{step >= 5 && <strong>{copy.tutorial.rightLabel}</strong>}</div></Narrative></div><Narrative show={step >= 5} className="bottom-bar"><PrimaryButton onClick={onNext}>{copy.tutorial.showMe}</PrimaryButton></Narrative></Screen>;
-}
-
-function UnderstandingDemo({ onNext }: { onNext: () => void }) {
-  const delays = useMemo(() => [160, 540, 1050, 1540, 2020, 2500, 3000], []);
-  const step = useNarrativeSteps(delays);
-  const segments = ["I have class,", "then dinner with friends.", "I’ll be walking a lot,", "and I want something relaxed", "but still photo-ready."];
-  const tags = ["Class", "Dinner with friends", "Lots of walking", "Relaxed", "Photo-ready"];
-  return <Screen><div className="topbar"><span /><div className="topbar-title">How YiYi listens</div><span /></div><div className="center-stage understanding-demo"><div><VoiceCore state={step < 6 ? "listening" : "thinking"} label="Understanding example" /><p className="voice-state-title">{step < 6 ? "Listening…" : "Understanding…"}</p><div className="semantic-transcript">{segments.map((segment, index) => <motion.span key={segment} className={step >= index + 2 ? "visible" : ""}>{segment} </motion.span>)}</div><div className="chip-row demo-tags">{tags.map((tag, index) => <AnimatePresence key={tag}>{step >= index + 2 && <motion.span className="chip" initial={{ opacity: 0, scale: .86 }} animate={{ opacity: 1, scale: 1 }} transition={calmSpring}>{tag}</motion.span>}</AnimatePresence>)}</div></div></div><Narrative show={step >= 7} className="bottom-bar"><PrimaryButton onClick={onNext}>Continue</PrimaryButton></Narrative></Screen>;
-}
-
-function RecommendationDemo({ onNext }: { onNext: () => void }) {
-  const delays = useMemo(() => [220, 620, 1040, 1460, 1900, 2440, 3050, 3640, 4200, 4860], []);
-  const step = useNarrativeSteps(delays);
-  const visibleSlots = (["outerwear", "top", "bottom", "bag", "shoes"] as const).slice(0, Math.max(0, step - 1));
-  const revised = step >= 9;
-  return <Screen className="recommendation-demo-screen"><header className="recommendation-demo-heading"><Narrative show={step >= 1}><div className="chip-row"><span className="chip">Gallery</span><span className="chip">Dinner</span><span className={`chip demo-changing-tag ${revised ? "revised" : ""}`}>{revised ? "Relaxed" : "Polished"}</span></div></Narrative><Narrative show={step >= 6}><h1>I’d wear this one.</h1><p>Clean tailoring that moves from gallery to dinner.</p></Narrative></header><div className="demo-outfit-stage"><OutfitCanvas outfit={revised ? recommendationAfter : recommendationBefore} wardrobe={demoWardrobe} visibleSlots={visibleSlots} /></div><Narrative show={step >= 7} className="transcript-bubble demo-revision-voice">“Make it a little less formal.”</Narrative><Narrative show={step >= 8} className="demo-causal-note">Polished <span>→</span> Relaxed</Narrative><Narrative show={step >= 10} className="bottom-bar"><PrimaryButton onClick={onNext}>{copy.tutorial.tryIt}</PrimaryButton></Narrative></Screen>;
-}
-
 function Permission({ denied, onAllow }: { denied: boolean; onAllow: () => void }) {
-  const delays = useMemo(() => [180, 520, 980], []);
-  const step = useNarrativeSteps(delays);
-  return <Screen><div className="center-stage"><div><Narrative show={step >= 1}><span className="permission-icon"><Mic size={28} /></span></Narrative><Narrative show={step >= 2}><h1 className="page-title">{denied ? "Microphone access is off" : copy.permission.title}</h1><p className="body-copy permission-copy">{denied ? copy.permission.denied : copy.permission.body}</p></Narrative></div></div><Narrative show={step >= 3} className="permission-actions"><PrimaryButton onClick={onAllow}>{denied ? "Try Microphone Again" : copy.permission.allow}</PrimaryButton>{denied && <SecondaryButton onClick={() => window.open("app-settings:")}>{copy.permission.settings}</SecondaryButton>}</Narrative></Screen>;
+  return <Screen><div className="center-stage"><div><span className="permission-icon"><Mic size={28} /></span><h1 className="page-title">{denied ? "Microphone access is off" : copy.permission.title}</h1><p className="body-copy permission-copy">{denied ? copy.permission.denied : copy.permission.body}</p></div></div><div className="permission-actions"><PrimaryButton onClick={onAllow}>{denied ? "Try Microphone Again" : copy.permission.allow}</PrimaryButton>{denied && <SecondaryButton onClick={() => window.open("app-settings:")}>{copy.permission.settings}</SecondaryButton>}</div></Screen>;
 }
 
 function DirectionScreen({ selected, onChange, onNext }: { selected: WardrobeDirection; onChange: (value: WardrobeDirection) => void; onNext: () => void }) {
-  return <Screen><header className="onboarding-heading"><h1>What should YiYi style from?</h1><p>This is about your wardrobe direction, not your identity. You can change it anytime.</p></header><div className="direction-list">{directions.map((direction) => <button key={direction.id} className={`direction-option ${selected === direction.id ? "selected" : ""}`} onClick={() => onChange(direction.id)}><span><strong>{direction.title}</strong><small>{direction.body}</small></span><i>{selected === direction.id && <Check size={16} />}</i></button>)}</div><div className="bottom-bar"><PrimaryButton onClick={onNext}>Continue</PrimaryButton></div></Screen>;
+  return <Screen><header className="onboarding-heading"><h1>How would you describe your wardrobe?</h1><p>This is a label for your wardrobe, not your identity or a hidden style rule. You can change it anytime.</p></header><div className="direction-list">{directions.map((direction) => <button key={direction.id} aria-pressed={selected === direction.id} className={`direction-option ${selected === direction.id ? "selected" : ""}`} onClick={() => onChange(direction.id)}><span><strong>{direction.title}</strong><small>{direction.body}</small></span><i>{selected === direction.id && <Check size={16} />}</i></button>)}</div><div className="bottom-bar"><PrimaryButton onClick={onNext}>Continue</PrimaryButton></div></Screen>;
 }
 
-function CalibrationScreen({ direction, index, feedback, onFeedback, onBack }: { direction: WardrobeDirection; index: number; feedback: StyleFeedback[]; onFeedback: (value: Sentiment) => void; onBack: () => void }) {
-  const current = feedback.find((value) => value.lookId === `look-${index + 1}`)?.sentiment;
-  return <Screen className="calibration-screen"><div className="topbar"><button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft /></button><div className="topbar-title">Your taste</div><span className="calibration-progress">{index + 1} / {looks.length}</span></div><header className="calibration-heading"><h1>How does this feel?</h1><p>There is no required number of likes or dislikes.</p></header><motion.div className="calibration-look" key={index} style={lookPosition(index, direction)} initial={{ opacity: 0, scale: .975 }} animate={{ opacity: 1, scale: 1 }} transition={calmSpring}>{current && <span className="calibration-current">{current === "like" ? "Liked" : current === "dislike" ? "Less like me" : "Skipped"}</span>}</motion.div><div className="calibration-actions"><SecondaryButton onClick={() => onFeedback("dislike")}><ThumbsDown size={17} /> Not for me</SecondaryButton><PrimaryButton onClick={() => onFeedback("like")}><Heart size={17} /> More like this</PrimaryButton><button className="skip-button" onClick={() => onFeedback("skip")}>Skip this look</button></div></Screen>;
+function selectedOptionSignal(profile: PreferenceProfile, option: ExplicitPreferenceOption) {
+  return (profile.preferenceSignals ?? []).find((signal) => signal.status !== "deleted" && signal.label === option.label && signal.polarity === option.polarity);
 }
 
-function toggle(values: string[], value: string) { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }
-
-function PreferenceScreen({ moreOf, lessOf, freeform, onMore, onLess, onFreeform, onBack, onNext }: { moreOf: string[]; lessOf: string[]; freeform: string; onMore: (value: string[]) => void; onLess: (value: string[]) => void; onFreeform: (value: string) => void; onBack: () => void; onNext: () => void }) {
-  const voice = usePreferenceVoice(onFreeform);
-  return <Screen className="preference-onboarding"><div className="topbar"><button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft /></button><div className="topbar-title">Fine-tune YiYi</div><span /></div><div className="preference-scroll"><section><h1>More of</h1><p>What would you enjoy seeing more often?</p><div className="chip-row preference-chips">{moreOptions.map((value) => <button className={`chip ${moreOf.includes(value) ? "selected" : ""}`} key={value} onClick={() => onMore(toggle(moreOf, value))}>{value}</button>)}</div></section><section><h1>Less of</h1><p>What should YiYi reduce or avoid?</p><div className="chip-row preference-chips">{lessOptions.map((value) => <button className={`chip ${lessOf.includes(value) ? "selected" : ""}`} key={value} onClick={() => onLess(toggle(lessOf, value))}>{value}</button>)}</div></section>{freeform && <div className="spoken-preference">“{freeform}”</div>}</div><div className="preference-voice-area"><button className="preference-mic" data-state={voice.state} onClick={() => void voice.start()} aria-label={voice.state === "error" ? "Retry voice preference" : "Tell YiYi another preference"}><Mic size={22} /></button><span>{voice.state === "listening" ? "Listening…" : voice.state === "understanding" ? "Understanding…" : voice.state === "done" ? "Added to your profile" : voice.state === "error" ? "Voice didn’t start. Tap to retry." : "Tell YiYi something else"}</span></div><div className="bottom-bar"><PrimaryButton onClick={onNext}>Review my style</PrimaryButton></div></Screen>;
+function PreferenceOptionGroup({ title, body, options, profile, disabled, onToggle }: { title: string; body: string; options: ExplicitPreferenceOption[]; profile: PreferenceProfile; disabled: boolean; onToggle: (option: ExplicitPreferenceOption, signal: PreferenceSignal | undefined) => void }) {
+  return <section><h1>{title}</h1><p>{body}</p><div className="chip-row preference-chips">{options.map((option) => {
+    const selected = selectedOptionSignal(profile, option);
+    return <button className={`chip ${selected ? "selected" : ""}`} aria-pressed={Boolean(selected)} disabled={disabled} key={option.id} onClick={() => onToggle(option, selected)}>{option.label}</button>;
+  })}</div></section>;
 }
 
-function Profile({ direction, feedback, moreOf, lessOf, freeform, onBack, onEdit, onUndo, onNext }: { direction: WardrobeDirection; feedback: StyleFeedback[]; moreOf: string[]; lessOf: string[]; freeform: string; onBack: () => void; onEdit: () => void; onUndo: () => void; onNext: () => void }) {
-  const liked = feedback.filter((value) => value.sentiment === "like").length;
-  const disliked = feedback.filter((value) => value.sentiment === "dislike").length;
-  const directionLabel = directions.find((value) => value.id === direction)?.title ?? "No preference";
-  return <Screen className="profile-review"><div className="topbar"><button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft /></button><YiYiMark size={37} /><button className="profile-edit" onClick={onEdit}>Edit</button></div><header><h1>{copy.calibration.profile}</h1><p>Everything here stays editable.</p></header><div className="profile-summary"><section><span>Wardrobe direction</span><strong>{directionLabel}</strong></section><section><span>Taste signals</span><strong>{liked} liked · {disliked} less like me</strong></section><section><span>More of</span><strong>{moreOf.join(", ") || "Open to suggestions"}</strong></section><section><span>Less of</span><strong>{lessOf.join(", ") || "Nothing yet"}</strong></section>{freeform && <section><span>In your words</span><strong>“{freeform}”</strong></section>}</div><div className="profile-review-actions">{feedback.length > 0 && <button className="undo-profile" onClick={onUndo}><RotateCcw size={15} /> Undo last style answer</button>}<PrimaryButton onClick={onNext}>Looks right</PrimaryButton><SecondaryButton onClick={onBack}>Back and adjust</SecondaryButton></div></Screen>;
+function PreferenceScreen({ profile, saving, saveError, onSaveDelta, onProfileChange, onToggleOption, onRemoveSignal, onBack, onNext }: { profile: PreferenceProfile; saving: boolean; saveError: boolean; onSaveDelta: (delta: PreferenceDelta) => Promise<PreferenceProfile>; onProfileChange: (profile: PreferenceProfile) => void; onToggleOption: (option: ExplicitPreferenceOption, signal: PreferenceSignal | undefined) => void; onRemoveSignal: (signalId: string) => Promise<void>; onBack: () => void; onNext: () => void }) {
+  const optionLabels = new Set([...morePreferenceOptions, ...lessPreferenceOptions].map((option) => option.label));
+  const customProfile = {
+    ...profile,
+    preferenceSignals: (profile.preferenceSignals ?? []).filter((signal) => signal.provenance.source !== "calibration_pairwise" && !optionLabels.has(signal.label)),
+  };
+  const customSignals = customProfile.preferenceSignals.filter((signal) => signal.status !== "deleted" && signal.polarity !== "unknown");
+  const voiceOnlyProfile = { ...customProfile, preferenceSignals: [] };
+  return <Screen className="preference-onboarding"><div className="topbar"><button className="icon-button" disabled={saving} onClick={onBack} aria-label="Back"><ArrowLeft /></button><div className="topbar-title">Fine-tune YiYi</div><span /></div><div className="preference-scroll"><PreferenceOptionGroup title="More of" body="What would you enjoy seeing more often?" options={morePreferenceOptions} profile={profile} disabled={saving} onToggle={onToggleOption} /><PreferenceOptionGroup title="Less of" body="What should YiYi reduce or avoid?" options={lessPreferenceOptions} profile={profile} disabled={saving} onToggle={onToggleOption} />{customSignals.length > 0 && <EditablePreferenceSignals signals={customSignals} onRemove={onRemoveSignal} />}</div>{saveError && <p className="preference-save-error" role="alert">That preference wasn’t saved. Try again before continuing.</p>}<FineTuneVoice profile={voiceOnlyProfile} onSaveDelta={onSaveDelta} onProfileChange={onProfileChange} onRemoveSignal={onRemoveSignal} /><div className="bottom-bar"><PrimaryButton disabled={saving || saveError} onClick={onNext}>{saving ? "Saving…" : "Review my style"}</PrimaryButton></div></Screen>;
 }
 
-function WardrobeSetup({ onBack, onExample, onPersonal }: { onBack: () => void; onExample: () => void; onPersonal: () => void }) {
-  return <Screen><div className="topbar"><button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft /></button><span /><span /></div><div className="center-stage"><div><YiYiMark size={78} /><h1 className="page-title setup-title">Make it yours.</h1><p className="body-copy setup-copy">Try YiYi instantly, or add a few tops, bottoms, shoes, and accessories from your own wardrobe.</p></div></div><div className="setup-actions"><PrimaryButton onClick={onExample}>Try the example wardrobe</PrimaryButton><SecondaryButton onClick={onPersonal}>Add my clothes</SecondaryButton></div></Screen>;
+function WardrobeSetup({ busy, error, onBack, onExample, onPersonal }: { busy: boolean; error: string | null; onBack: () => void; onExample: () => void; onPersonal: () => void }) {
+  return <Screen><div className="topbar"><button className="icon-button" disabled={busy} onClick={onBack} aria-label="Back"><ArrowLeft /></button><span /><span /></div><div className="center-stage"><div><YiYiMark size={78} /><h1 className="page-title setup-title">Make it yours.</h1><p className="body-copy setup-copy">Try YiYi instantly, or add a few tops, bottoms, shoes, and accessories from your own wardrobe.</p></div></div>{error && <p className="preference-save-error" role="alert">{error}</p>}<div className="setup-actions" aria-busy={busy}><PrimaryButton disabled={busy} onClick={onExample}>{busy ? "Saving setup…" : "Try the example wardrobe"}</PrimaryButton><SecondaryButton disabled={busy} onClick={onPersonal}>Add my clothes</SecondaryButton></div></Screen>;
 }

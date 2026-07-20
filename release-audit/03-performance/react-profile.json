@@ -1,0 +1,11 @@
+{
+  "environment": "Vitest jsdom React Profiler; deterministic reduced-motion OutfitCanvas fixture",
+  "flow": "initial outfit to targeted shoe replacement",
+  "commits": [
+    { "phase": "mount", "actualDurationMs": 2.703082, "baseDurationMs": 0.788412 },
+    { "phase": "update", "actualDurationMs": 0.277457, "baseDurationMs": 0.257083 }
+  ],
+  "targetedReplacementUpdateCommits": 1,
+  "frameSamplerWebKit": { "medianMs": 17, "p95Ms": "23-24", "p99Ms": "24-25", "maxConsecutiveSevereFrames": 0 },
+  "note": "Profiler durations are local regression evidence, not a device performance claim."
+}

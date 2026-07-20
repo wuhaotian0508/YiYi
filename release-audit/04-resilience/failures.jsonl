@@ -1,0 +1,3 @@
+{"id":"RES-001","severity":"high","status":"fixed","summary":"Distributed limiter rejection escaped routes instead of a structured fail-closed response","fix":"takeRateLimit reports unavailable and all paid routes return 503 without invoking providers"}
+{"id":"RES-002","severity":"high","status":"fixed","summary":"OpenAI SDK defaulted to two hidden retries for paid requests","fix":"all OpenAI clients use maxRetries 0 and bounded stage timeouts"}
+{"id":"RES-003","severity":"critical","status":"fixed","summary":"Terra Structured Output schema contained transforms and threw before any live provider request","fix":"plain required provider wire schema compiles to strict JSON Schema; canonical schema still validates returned data"}

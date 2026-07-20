@@ -1,5 +1,16 @@
 import { PreferenceProfileSchema, type PreferenceProfile, type StyleFeedback, type StyleVector, type WardrobeDirection } from "@/domain/schemas";
 import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
+import { buildCalibrationPreferenceProfile, type BuildCalibrationPreferenceProfileInput } from "@/domain/preferences/calibration-engine";
+
+export {
+  CalibrationContractError,
+  buildCalibrationPreferenceProfile,
+  canonicalizeCalibrationResponses,
+  createCalibrationResponse,
+  deriveCalibrationModel,
+  upsertCalibrationResponse,
+} from "@/domain/preferences/calibration-engine";
+export { calibrationCatalogV2 } from "@/domain/preferences/calibration-catalog";
 
 type CalibrationSemantics = { label: string; vector: StyleVector; styleTags: string[] };
 
@@ -18,14 +29,19 @@ function clamp(value: number) {
   return Math.max(-1, Math.min(1, value));
 }
 
-export function buildPreferenceProfile(input: {
+type LegacyCalibrationInput = {
   direction: WardrobeDirection;
   feedback: StyleFeedback[];
   moreOf: string[];
   lessOf: string[];
   freeform: string;
   now?: number;
-}): PreferenceProfile {
+};
+
+export function buildPreferenceProfile(input: LegacyCalibrationInput): PreferenceProfile;
+export function buildPreferenceProfile(input: BuildCalibrationPreferenceProfileInput): PreferenceProfile;
+export function buildPreferenceProfile(input: LegacyCalibrationInput | BuildCalibrationPreferenceProfileInput): PreferenceProfile {
+  if ("responses" in input) return buildCalibrationPreferenceProfile(input);
   const now = input.now ?? Date.now();
   const neutral = createNeutralPreferenceProfile(now);
   const evidence = input.feedback.filter((entry) => entry.sentiment !== "skip");

@@ -1,0 +1,11 @@
+{
+  "tool": "Next.js 16.2.10 experimental-analyze (Turbopack)",
+  "productionStaticJsBytes": 3217173,
+  "productionStaticJsNote": "Whole-build byte totals vary with chunking/hashes and are not used as the acceptance signal.",
+  "globalCssBytes": 47064,
+  "todayOnlySwiperCssBytes": 4820,
+  "calibrationLabProductionEntryChunks": [],
+  "calibrationLabRealComponentPresentInProductionGraph": false,
+  "reviewInstrumentationMatchesInProductionClientChunks": 0,
+  "productionRoutes": { "/": 200, "/today": 200, "/onboarding": 200, "/calibration-lab": 404, "/motion-review": 404 }
+}

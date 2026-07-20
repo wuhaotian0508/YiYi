@@ -2,6 +2,10 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // The deterministic visual/motion contract runs serially in the dedicated
+  // WebKit configuration. Keeping it out of the general parallel E2E matrix
+  // avoids duplicate baselines and sticky review chrome in desktop snapshots.
+  testIgnore: "motion-review.spec.ts",
   fullyParallel: true,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? "github" : "list",

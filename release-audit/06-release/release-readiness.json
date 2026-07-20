@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "candidate": "yiyi-rc.1",
+  "baseCommit": "085b09d92dd33e48377018a503a7706b7421d1f9",
+  "schemaVersion": 6,
+  "status": "ready-for-device-validation",
+  "gates": {
+    "lint": "pass",
+    "typecheck": "pass",
+    "unitPropertyRace": "pass: 35 files / 192 tests",
+    "recommendationEval": "pass",
+    "productionBuild": "pass: Next.js 16.2.10",
+    "chromiumWebkitE2E": "pass: 33 passed / 7 intentional skips",
+    "motionVisual": "pass: WebKit 7 / 7",
+    "axe": "pass",
+    "faultSmoke": "pass",
+    "mockLoad": "pass",
+    "bundleAnalysis": "pass: review modules absent; global CSS -9.3%; whole JS +0.23%",
+    "productionRouteSmoke": "pass: primary routes 200; dev review routes 404; mock upload schema valid",
+    "controlledRealtimeLiveSmoke": "pass: 2 / 2; one token per explicit session",
+    "secretScan": "pass",
+    "productionDependencyAudit": "pass"
+  },
+  "deviceOnly": true,
+  "rcCommit": null,
+  "tag": null
+}

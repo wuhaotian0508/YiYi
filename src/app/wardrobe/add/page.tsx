@@ -5,12 +5,12 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Camera, Check, ChevronLeft, ChevronRight, ImagePlus, RotateCcw } from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotionConfig } from "motion/react";
 import { z } from "zod";
-import { YiYiMark } from "@/components/brand/yiyi-mark";
 import { PrimaryButton } from "@/components/ui/buttons";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { Garment } from "@/components/wardrobe/garment";
+import { VoiceCore } from "@/components/voice/voice-core";
 import { ItemImageSetSchema, WardrobeAnalysisSchema, WardrobeItemSchema, type WardrobeAnalysis, type WardrobeItem } from "@/domain/schemas";
 import { clothingCategories, colorHex, colorIds, colorLabels, commonMaterials } from "@/domain/taxonomy";
 import { db, setExperienceMode } from "@/lib/storage/db";
@@ -23,7 +23,7 @@ type Sheet = "color" | "material" | "category" | null;
 
 const ProcessResponseSchema = z.object({
   requestId: z.string().uuid(),
-  cutoutDataUrl: z.string().startsWith("data:image/"),
+  cutoutDataUrl: z.string().max(1_500_000).regex(/^data:image\/(?:webp|png);base64,[A-Za-z0-9+/]*={0,2}$/),
   analysis: WardrobeAnalysisSchema,
 }).strict();
 
@@ -50,10 +50,13 @@ async function preprocessImage(file: File) {
   }
 }
 
-async function dataUrlToBlob(dataUrl: string) {
-  const response = await fetch(dataUrl);
-  if (!response.ok) throw new Error("Processed image could not be decoded.");
-  return response.blob();
+function dataUrlToBlob(dataUrl: string) {
+  const match = /^data:(image\/(?:webp|png));base64,([A-Za-z0-9+/]*={0,2})$/.exec(dataUrl);
+  if (!match) throw new Error("Processed image could not be decoded.");
+  const binary = window.atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes.buffer as ArrayBuffer], { type: match[1] });
 }
 
 function loadBlobImage(blob: Blob) {
@@ -97,7 +100,7 @@ export default function AddWardrobePage() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = useReducedMotionConfig();
 
   useEffect(() => () => {
     controllerRef.current?.abort();
@@ -135,7 +138,7 @@ export default function AddWardrobePage() {
     try {
       const normalized = await preprocessImage(file);
       const response = await requestProcessing(normalized, file.name);
-      const cutout = await dataUrlToBlob(response.cutoutDataUrl);
+      const cutout = dataUrlToBlob(response.cutoutDataUrl);
       const nextPreview = URL.createObjectURL(cutout);
       if (preview) URL.revokeObjectURL(preview);
       setSourceBlob(normalized);
@@ -222,7 +225,7 @@ export default function AddWardrobePage() {
   }) : null;
 
   const sheetLabel = sheet === "color" ? "Select colors" : sheet === "material" ? "Select materials" : "Select category";
-  return <main className="phone-page"><div className="page-column"><header className="topbar"><Link href="/wardrobe" className="icon-button" aria-label="Back"><ChevronLeft /></Link><div className="topbar-title">{step === "review" ? "Review item" : "Add clothes"}</div><span /></header><AnimatePresence mode="popLayout" initial={false}><motion.div className="add-flow-motion" key={step} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -5 }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{step === "choose" && <Choose onFile={(file) => void chooseFile(file)} />}{step === "processing" && <Processing />}{step === "error" && <ProcessingError message={error} onRetry={() => setStep("choose")} />}{step === "review" && reviewItem && analysis && <Review item={reviewItem} preview={preview} onSheet={setSheet} onSave={() => void saveItem()} saving={saving} />}</motion.div></AnimatePresence><BottomSheet open={Boolean(sheet && analysis)} onClose={() => setSheet(null)} label={sheetLabel}>{analysis && <>{sheet === "color" && <ColorSheet value={analysis.primaryColor} onChange={(primaryColor) => updateAnalysis({ primaryColor })} onDone={() => setSheet(null)} />}{sheet === "material" && <MaterialSheet value={analysis.materials[0] ?? "Unknown"} onChange={(material) => updateAnalysis({ materials: [material] })} onDone={() => setSheet(null)} />}{sheet === "category" && <CategorySheet value={analysis.category} onChange={(category) => updateAnalysis({ category })} onDone={() => setSheet(null)} />}</>}</BottomSheet></div></main>;
+  return <main className="phone-page"><div className="page-column"><header className="topbar"><Link href="/wardrobe" className="icon-button" aria-label="Back"><ChevronLeft /></Link><div className="topbar-title">{step === "review" ? "Review item" : "Add clothes"}</div><span /></header><AnimatePresence mode="popLayout" initial={false}><motion.div className="add-flow-motion" key={step} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(7px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(-4px)" }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{step === "choose" && <Choose onFile={(file) => void chooseFile(file)} />}{step === "processing" && <Processing />}{step === "error" && <ProcessingError message={error} onRetry={() => setStep("choose")} />}{step === "review" && reviewItem && analysis && <Review item={reviewItem} preview={preview} onSheet={setSheet} onSave={() => void saveItem()} saving={saving} />}</motion.div></AnimatePresence><BottomSheet open={Boolean(sheet && analysis)} onClose={() => setSheet(null)} label={sheetLabel}>{analysis && <>{sheet === "color" && <ColorSheet value={analysis.primaryColor} onChange={(primaryColor) => updateAnalysis({ primaryColor })} onDone={() => setSheet(null)} />}{sheet === "material" && <MaterialSheet value={analysis.materials[0] ?? "Unknown"} onChange={(material) => updateAnalysis({ materials: [material] })} onDone={() => setSheet(null)} />}{sheet === "category" && <CategorySheet value={analysis.category} onChange={(category) => updateAnalysis({ category })} onDone={() => setSheet(null)} />}</>}</BottomSheet></div></main>;
 }
 
 function Choose({ onFile }: { onFile: (file?: File) => void }) {
@@ -230,22 +233,12 @@ function Choose({ onFile }: { onFile: (file?: File) => void }) {
 }
 
 function Processing() {
-  const reduceMotion = useReducedMotion();
-  const [progress, setProgress] = useState(reduceMotion ? 2 : 0);
-  useEffect(() => {
-    if (reduceMotion) return;
-    const understand = window.setTimeout(() => setProgress(1), 680);
-    const settle = window.setTimeout(() => setProgress(2), 1380);
-    return () => { window.clearTimeout(understand); window.clearTimeout(settle); };
-  }, [reduceMotion]);
-  return <section className="add-flow"><div className="center-stage"><div className="processing-narrative"><p className="secondary-copy">Processing 1 of 1</p><div className="processing-focus"><VoiceCoreSmall active={progress < 2} /><AnimatePresence mode="wait"><motion.div key={progress} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}><p className="body-copy">{progress === 0 ? "Removing background…" : progress === 1 ? "Understanding the item…" : "Preparing your review…"}</p><span>{progress === 0 ? "Separating the garment" : progress === 1 ? "Reading category, color, and material" : "Keeping every field editable"}</span></motion.div></AnimatePresence></div><div className="processing-steps"><span className={progress >= 1 ? "complete" : "active"}>{progress >= 1 ? <Check size={14} /> : "1"} Cutout</span><i /><span className={progress >= 2 ? "complete" : progress === 1 ? "active" : ""}>{progress >= 2 ? <Check size={14} /> : "2"} Details</span></div></div></div></section>;
+  return <section className="add-flow"><div className="center-stage"><div className="processing-narrative"><p className="secondary-copy">Processing 1 of 1</p><div className="processing-focus"><VoiceCore state="thinking" label="YiYi is preparing this item" /><div><p className="body-copy">Preparing your item…</p><span>Removing the background and reading editable details</span></div></div><div className="processing-steps"><span className="active">Cutout</span><i /><span className="active">Details</span></div></div></div></section>;
 }
 
 function ProcessingError({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return <section className="add-flow"><div className="center-stage"><div><VoiceCoreSmall /><h1 className="page-title" style={{ fontSize: 25 }}>Something went wrong</h1><p className="secondary-copy" style={{ maxWidth: 300 }}>{message}</p></div></div><PrimaryButton onClick={onRetry}><RotateCcw size={17} />Choose another photo</PrimaryButton></section>;
+  return <section className="add-flow"><div className="center-stage"><div><VoiceCore state="error" label="Item processing failed" disabled /><h1 className="page-title" style={{ fontSize: 25 }}>Something went wrong</h1><p className="secondary-copy" style={{ maxWidth: 300 }}>{message}</p></div></div><PrimaryButton onClick={onRetry}><RotateCcw size={17} />Choose another photo</PrimaryButton></section>;
 }
-
-function VoiceCoreSmall({ active = false }: { active?: boolean }) { return <div className={`processing-core ${active ? "active" : ""}`}><YiYiMark size={47} /></div>; }
 
 function Review({ item, preview, onSheet, onSave, saving }: { item: WardrobeItem; preview: string | null; onSheet: (sheet: Sheet) => void; onSave: () => void; saving: boolean }) {
   const rows = [
@@ -253,7 +246,7 @@ function Review({ item, preview, onSheet, onSave, saving }: { item: WardrobeItem
     <button key="color" className="attribute-row" onClick={() => onSheet("color")}><span>Color</span><span style={{ display: "flex", alignItems: "center", gap: 7 }}>{colorLabels[item.primaryColor]} <i style={{ width: 12, height: 12, borderRadius: "50%", background: colorHex[item.primaryColor] }} /><ChevronRight size={15} /></span></button>,
     <button key="material" className="attribute-row" onClick={() => onSheet("material")}><span>Material</span><span>{item.materials[0]} <ChevronRight size={15} /></span></button>,
   ];
-  return <section className="add-flow"><motion.div className="review-preview" initial={{ opacity: 0, scale: .96 }} animate={{ opacity: 1, scale: 1 }} transition={calmSpring}>{preview ? <Image unoptimized fill sizes="(max-width: 430px) 90vw, 390px" src={preview} alt="Processed clothing item" style={{ objectFit: "contain", padding: "12px 5%", filter: "drop-shadow(0 10px 10px rgb(0 0 0 / .12))" }} /> : <div style={{ transform: "scale(2)" }}><Garment item={item} /></div>}</motion.div><motion.h2 className="review-name" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .12 }}>{item.subtype}</motion.h2><div>{rows.map((row, index) => <motion.div key={index} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .16 + index * .055, duration: .24 }}>{row}</motion.div>)}</div><motion.p className="ready-copy" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .35 }}><Check size={15} /> Ready to add</motion.p><motion.div style={{ marginTop: "auto" }} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .4 }}><PrimaryButton disabled={saving} onClick={onSave}>{saving ? "Saving…" : "Add to wardrobe"}</PrimaryButton></motion.div></section>;
+  return <section className="add-flow"><div className="review-preview">{preview ? <Image unoptimized fill sizes="(max-width: 430px) 90vw, 390px" src={preview} alt="Processed clothing item" style={{ objectFit: "contain", padding: "12px 5%", filter: "drop-shadow(0 10px 10px rgb(0 0 0 / .12))" }} /> : <div style={{ transform: "scale(2)" }}><Garment item={item} /></div>}</div><h2 className="review-name">{item.subtype}</h2><div>{rows.map((row, index) => <div key={index}>{row}</div>)}</div><p className="ready-copy"><Check size={15} /> Ready to add</p><div style={{ marginTop: "auto" }}><PrimaryButton disabled={saving} onClick={onSave}>{saving ? "Saving…" : "Add to wardrobe"}</PrimaryButton></div></section>;
 }
 
 function categoryLabel(value: WardrobeItem["category"]) { return value.replaceAll("_", " ").replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()); }

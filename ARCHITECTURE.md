@@ -19,6 +19,29 @@ Realtime owns dialogue, intent selection, strict tool calls, turn-taking, interr
 
 ## Main pipelines
 
+### Style calibration and preference learning
+
+Research alternatives, sources, rejected methods, and residual validity limits are recorded in `YIYI_STYLE_CALIBRATION_RESEARCH.md`.
+
+```text
+descriptive wardrobe direction (metadata only)
+→ four base matched-pair questions
+→ A / B / Both / Neither / Skip canonical response
+→ confidence check and at most two optional follow-ups
+→ provenance-bearing More / Less / Unknown signals
+→ active-signal-only style vector and anchor projection
+→ Fine-tune structured chips or strict Realtime PreferenceDelta
+→ serialized canonical mutation and Dexie write
+→ editable Profile review / Preferences memory
+→ recommendation reads only active durable signals
+```
+
+The catalog, response schema, signal derivation, and profile projection are deterministic TypeScript. Fixed onboarding images are never sent to an AI for analysis. Canonical A/B semantics are independent from presentation: a session-stable seed alternates left/right order, the response stores that order, and edits reuse it. Wardrobe direction remains visible descriptive metadata and is excluded from recommendation summaries, constraints, and scoring. A/B losers stay Unknown, Skip adds no evidence, and unstructured prose is `needs_review` rather than an active rule. Demo data has explicit provenance; Demo-to-Personal cleanup cannot promote the canned profile into personal learning.
+
+`/calibration-lab` is a non-persistent research surface. It compares pairwise and legacy single-card interaction, controlled mannequin and legacy model-photo presentation, A-left/B-left order, scripted response patterns, derived confidence/vector/signals, and deterministic recommendation counterfactuals. Production returns 404 unless `NEXT_PUBLIC_ENABLE_CALIBRATION_LAB=true`. The lab and automated invariance tests prove presentation order cannot change canonical profile semantics; they do not prove that residual synthetic-image or garment-covariance bias has been eliminated for people.
+
+### Recommendation
+
 ```text
 DailyIntent
 → validated IntentDelta merge (including scoped temporary rules)
@@ -56,7 +79,28 @@ native camera/library input
 
 ## Realtime
 
-The browser requests an ephemeral secret from `/api/realtime/token`, then connects a persistent `RealtimeSession` with that secret. The official SDK manages WebRTC. YiYi explicitly uses patient `semantic_vad` (`eagerness: low`) with automatic turn response and interruption enabled, so natural sentence pauses do not behave like a send button and user speech can barge into YiYi output. Pending token requests and obsolete SDK sessions are aborted or closed by a connection generation guard; events from an old session cannot mutate the active UI. Raw `RTCPeerConnection`, SDP, and long-lived server keys are forbidden in client code.
+One app-level `VoiceSessionCoordinator` owns the only token request, connect promise, adapter, microphone owner, lifecycle snapshot, and teardown promise. Today and Fine-tune use different agent contexts, but both acquire that same coordinator under the mutually exclusive `today | fine-tune` owner. They do not construct sessions from render, transcript, page phase, tool result, or recommendation state changes.
+
+```text
+explicit Voice Dock / Fine-tune tap
+→ VoiceSessionCoordinator.start(owner)
+→ reuse the owner's pending connect or healthy session when present
+→ wait for any previous adapter teardown
+→ create voiceAttemptId + sessionGeneration
+→ adapter requests exactly one /api/realtime/token
+→ construct strict tools, RealtimeAgent, and RealtimeSession
+→ SDK opens WebRTC, microphone input, remote audio, and interruption handling
+→ coordinator publishes one mutually exclusive lifecycle snapshot
+→ generation-checked tool handler
+→ version-checked recommendation / persistence mutation
+→ SDK audio response and continued turns on the same session
+→ explicit end, background, timeout, route cleanup, or runtime failure
+→ unsubscribe listeners, invalidate generation, close SDK session, await teardown
+```
+
+The browser requests an ephemeral secret from `/api/realtime/token`, then connects a persistent `RealtimeSession` with that secret. The official SDK manages WebRTC. YiYi explicitly uses patient `semantic_vad` (`eagerness: low`) with automatic turn response and interruption enabled, so natural sentence pauses do not behave like a send button and user speech can barge into YiYi output. Pending token fetches are abortable; obsolete listener, transcript, and tool events are rejected by session generation. A committed Dexie mutation remains locked through local publish, while a still-preparing mutation can be cancelled. Raw `RTCPeerConnection`, SDP, media-track plumbing, audio playback buffers, and long-lived server keys are forbidden in client code.
+
+The lifecycle snapshot is the sole source for `idle | connecting | listening | thinking | speaking | interrupted | error | rate_limited`. Today's recommendation phase remains separate and cannot imply connection health. A 429 enters `rate_limited`, honors `Retry-After`, and requires an explicit user retry after the cooldown; YiYi has no automatic reconnect timer. Diagnostics correlate only safe fields such as attempt, generation, owner, stage, result, duration, retry count, status, SDK status, and disconnect reason.
 
 ## Reliability and privacy
 

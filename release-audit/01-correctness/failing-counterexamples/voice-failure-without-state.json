@@ -1,0 +1,24 @@
+{
+  "id": "voice-failure-without-state-error",
+  "statusBeforeFix": "reproduced",
+  "test": "tests/unit/voice-session-coordinator.test.ts > releases an adapter when a runtime failure arrives without a matching state event",
+  "minimalSequence": [
+    "connect succeeds",
+    "adapter emits listening",
+    "adapter emits failure(audio/AUDIO_OUTPUT_FAILED)",
+    "adapter does not emit state(error)"
+  ],
+  "observedBefore": {
+    "uiStatus": "error",
+    "disconnectCalls": 0,
+    "activeSessionRetained": true,
+    "explicitRetryCreatesNewAdapter": false
+  },
+  "expected": {
+    "uiStatus": "error",
+    "disconnectCalls": 1,
+    "activeSessionRetained": false,
+    "explicitRetryCreatesNewAdapter": true
+  },
+  "rootCause": "Runtime cleanup was coupled to a later state(error) event even though onFailure is independently part of the adapter contract."
+}

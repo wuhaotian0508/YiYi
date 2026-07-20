@@ -35,6 +35,7 @@ function tone(audio: AudioContext, start: number, frequency: number, duration: n
   gain.connect(destination);
   oscillator.start(start);
   oscillator.stop(start + duration + 0.01);
+  return oscillator;
 }
 
 export function playSound(name: YiYiSound) {
@@ -45,27 +46,27 @@ export function playSound(name: YiYiSound) {
   master.gain.value = 0.32;
   master.connect(audio.destination);
   const now = audio.currentTime + 0.004;
+  let finalOscillator: OscillatorNode | null = null;
 
-  if (name === "listen") tone(audio, now, 360, 0.11, 0.14, master, 480);
+  if (name === "listen") finalOscillator = tone(audio, now, 360, 0.11, 0.14, master, 480);
   if (name === "understood") {
     tone(audio, now, 440, 0.13, 0.11, master, 520);
-    tone(audio, now + 0.085, 620, 0.15, 0.08, master);
+    finalOscillator = tone(audio, now + 0.085, 620, 0.15, 0.08, master);
   }
   if (name === "recommendation") {
     tone(audio, now, 392, 0.18, 0.1, master, 466);
-    tone(audio, now + 0.11, 587, 0.22, 0.075, master);
+    finalOscillator = tone(audio, now + 0.11, 587, 0.22, 0.075, master);
   }
-  if (name === "replacement") tone(audio, now, 510, 0.15, 0.1, master, 390);
+  if (name === "replacement") finalOscillator = tone(audio, now, 510, 0.15, 0.1, master, 390);
   if (name === "confirmed") {
     tone(audio, now, 440, 0.18, 0.1, master);
     tone(audio, now + 0.12, 554, 0.19, 0.085, master);
-    tone(audio, now + 0.24, 659, 0.23, 0.07, master);
+    finalOscillator = tone(audio, now + 0.24, 659, 0.23, 0.07, master);
   }
   if (name === "error") {
     tone(audio, now, 290, 0.16, 0.1, master, 230);
-    tone(audio, now + 0.12, 220, 0.18, 0.07, master);
+    finalOscillator = tone(audio, now + 0.12, 220, 0.18, 0.07, master);
   }
 
-  window.setTimeout(() => master.disconnect(), 700);
+  finalOscillator?.addEventListener("ended", () => master.disconnect(), { once: true });
 }
-

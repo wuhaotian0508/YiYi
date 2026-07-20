@@ -1,4 +1,6 @@
-import { OutfitSchema, ScoreTraceSchema, type Outfit, type OutfitItemIds, type ScoreTrace, type WardrobeItem } from "@/domain/schemas";
+import { OutfitSchema, ScoreTraceSchema, type Outfit, type OutfitItemIds, type PreferenceSignal, type ScoreTrace, type StyleVector, type WardrobeItem } from "@/domain/schemas";
+import { activeLongTermPreferenceSignals, effectiveStyleProjection } from "@/domain/preferences/profile-mutations";
+import { matchesPreferenceSignal, outfitMatchesCombinationSignal } from "@/domain/preferences/preference-matching";
 import type { RecommendationContext } from "@/domain/recommendation/context";
 import { validateOutfit } from "@/domain/recommendation/constraints";
 
@@ -65,10 +67,12 @@ export function matchesSoftPreference(item: WardrobeItem, preference: string) {
   return itemTerms.some((entry) => ruleTerms.includes(entry) || value.includes(entry) || entry.includes(value));
 }
 
-function styleVectorSignal(item: WardrobeItem, context: RecommendationContext) {
+const styleAxes: (keyof StyleVector)[] = ["relaxedPolished", "minimalExpressive", "softCool", "fittedOversized", "classicTrendAware", "feminineNeutral"];
+
+function itemStyleVector(item: WardrobeItem): StyleVector {
   const terms = new Set([...item.styleTags, item.fit, ...semanticTokens(item.subtype)].map((value) => value.toLowerCase()));
   const has = (...values: string[]) => values.some((value) => terms.has(value));
-  const itemVector = {
+  return {
     relaxedPolished: has("polished", "tailored", "refined") ? 1 : has("relaxed", "casual", "sporty") ? -1 : 0,
     minimalExpressive: has("expressive", "colorful", "statement") ? 1 : has("minimal", "clean") ? -1 : 0,
     softCool: has("cool", "edgy", "utility") ? 1 : has("soft", "cozy", "delicate") ? -1 : 0,
@@ -76,8 +80,30 @@ function styleVectorSignal(item: WardrobeItem, context: RecommendationContext) {
     classicTrendAware: has("modern", "trend-aware", "statement") ? 1 : has("classic", "timeless") ? -1 : 0,
     feminineNeutral: has("neutral", "utility", "unisex") ? 1 : has("feminine", "delicate") ? -1 : 0,
   };
-  const axes = Object.keys(itemVector) as (keyof typeof itemVector)[];
-  return axes.reduce((sum, axis) => sum + itemVector[axis] * context.profile.styleVector[axis], 0) / axes.length;
+}
+
+function styleVectorSignal(item: WardrobeItem, context: RecommendationContext, styleVector = effectiveStyleProjection(context.profile).styleVector) {
+  const itemVector = itemStyleVector(item);
+  return styleAxes.reduce((sum, axis) => sum + itemVector[axis] * styleVector[axis], 0) / styleAxes.length;
+}
+
+function positiveCosine(left: StyleVector, right: StyleVector) {
+  const dot = styleAxes.reduce((sum, axis) => sum + left[axis] * right[axis], 0);
+  const leftNorm = Math.sqrt(styleAxes.reduce((sum, axis) => sum + left[axis] ** 2, 0));
+  const rightNorm = Math.sqrt(styleAxes.reduce((sum, axis) => sum + right[axis] ** 2, 0));
+  if (leftNorm === 0 || rightNorm === 0) return 0;
+  return Math.max(0, dot / (leftNorm * rightNorm));
+}
+
+function rejectedStyleLookSimilarity(items: readonly WardrobeItem[], signal: PreferenceSignal) {
+  if (!signal.semanticVector || signal.attribute !== "style_look" || signal.polarity !== "less") return 0;
+  const vectors = items.map(itemStyleVector);
+  const outfitVector = Object.fromEntries(styleAxes.map((axis) => [axis, mean(vectors.map((vector) => vector[axis]), 0)])) as StyleVector;
+  const vectorSimilarity = positiveCosine(outfitVector, signal.semanticVector);
+  const outfitTags = new Set(items.flatMap((item) => item.styleTags.map((tag) => tag.toLowerCase())));
+  const signalTags = signal.styleTags.map((tag) => tag.toLowerCase());
+  const tagOverlap = signalTags.length ? signalTags.filter((tag) => outfitTags.has(tag)).length / signalTags.length : 0;
+  return clamp01(vectorSimilarity * 0.8 + tagOverlap * 0.2);
 }
 
 function colorCompatibility(items: WardrobeItem[]) {
@@ -127,7 +153,8 @@ function accessoryCompatibility(items: WardrobeItem[], context: RecommendationCo
   let score = 0.85;
   if (bag && shoes) score -= Math.min(0.18, Math.abs(bag.formality - shoes.formality) * 0.045);
   if (new Set(metals).size > 1 && !metals.includes("mixed")) score -= 0.08;
-  if (context.profile.preferredMetals.length && metals.length && metals.some((metal) => metal && !context.profile.preferredMetals.includes(metal as "gold" | "silver" | "mixed"))) score -= 0.08;
+  const legacyPreferredMetals = context.profile.preferenceSignals === undefined ? context.profile.preferredMetals : [];
+  if (legacyPreferredMetals.length && metals.length && metals.some((metal) => metal && !legacyPreferredMetals.includes(metal as "gold" | "silver" | "mixed"))) score -= 0.08;
   const accessoryCount = items.filter((item) => ["bag", "jewelry", "headwear", "scarf", "belt", "eyewear", "hair_accessory", "other_accessory"].includes(item.category)).length;
   if (accessoryCount >= 3) score -= 0.12;
   else if (accessoryCount === 2) score -= 0.03;
@@ -136,11 +163,19 @@ function accessoryCompatibility(items: WardrobeItem[], context: RecommendationCo
 
 function itemStyleSignal(item: WardrobeItem, context: RecommendationContext) {
   const tags = new Set(item.styleTags.map((tag) => tag.toLowerCase()));
-  let score = styleVectorSignal(item, context) * 0.32;
+  const styleProjection = effectiveStyleProjection(context.profile);
+  let score = styleVectorSignal(item, context, styleProjection.styleVector) * 0.32;
   for (const term of context.intent.aestheticTerms) if (tags.has(term.toLowerCase())) score += 0.16;
   for (const tag of context.desiredStyleTags) if (tags.has(tag)) score += 0.2;
   for (const tag of context.undesiredStyleTags) if (tags.has(tag)) score -= 0.24;
-  for (const rule of [...context.profile.softPreferences, ...context.intent.temporaryPreferences]) {
+  const canonicalSignals = context.profile.preferenceSignals === undefined
+    ? null
+    : activeLongTermPreferenceSignals(context.profile);
+  for (const signal of canonicalSignals ?? []) {
+    if (matchesPreferenceSignal(item, signal)) score += (signal.polarity === "less" ? -1 : 1) * 0.28 * signal.confidence;
+  }
+  const durableRules = canonicalSignals === null ? context.profile.softPreferences : [];
+  for (const rule of [...durableRules, ...context.intent.temporaryPreferences]) {
     if (rule.key.endsWith("note")) continue;
     if (matchesSoftPreference(item, rule.value)) score += (rule.polarity === "avoid" ? -1 : 1) * 0.28;
   }
@@ -158,15 +193,25 @@ function itemStyleSignal(item: WardrobeItem, context: RecommendationContext) {
       : [item.subtype];
     if (values.some((value) => value.toLowerCase().includes(rule.value) || rule.value.includes(value.toLowerCase()))) score += (rule.polarity === "avoid" ? -1 : 1) * 0.3;
   }
-  for (const anchor of context.profile.styleAnchors) {
+  for (const anchor of styleProjection.styleAnchors) {
     for (const tag of tags) score += (anchor.styleTags[tag] ?? 0) * anchor.confidence * 0.12;
   }
-  const freeformTerms = semanticTokens(context.profile.preferenceNotes.freeform);
-  if (freeformTerms.some((term) => [...tags, item.fit, ...semanticTokens(item.subtype)].includes(term))) score += 0.08;
-  if (context.profile.wardrobeDirection === "neutral" && [...tags].some((tag) => ["neutral", "minimal", "clean"].includes(tag))) score += 0.04;
-  if (context.profile.wardrobeDirection === "menswear" && [...tags].some((tag) => ["tailored", "utility", "classic"].includes(tag))) score += 0.04;
-  if (context.profile.wardrobeDirection === "womenswear" && [...tags].some((tag) => ["soft", "feminine", "delicate"].includes(tag))) score += 0.04;
   return score * confidence(item, "style");
+}
+
+function outfitPreferenceAdjustment(items: WardrobeItem[], context: RecommendationContext) {
+  if (context.profile.preferenceSignals === undefined) return 0;
+  const activeSignals = activeLongTermPreferenceSignals(context.profile);
+  const combinationAdjustment = activeSignals
+    .filter((signal) => signal.attribute === "combination" && signal.strength === "soft")
+    .reduce((score, signal) => {
+      if (!outfitMatchesCombinationSignal(items, signal)) return score;
+      return score + (signal.polarity === "less" ? -1 : 1) * 0.22 * signal.confidence;
+    }, 0);
+  const rejectedStylePenalty = activeSignals
+    .filter((signal) => signal.attribute === "style_look" && signal.polarity === "less")
+    .reduce((penalty, signal) => penalty + rejectedStyleLookSimilarity(items, signal) * signal.confidence * 0.14, 0);
+  return combinationAdjustment - Math.min(0.24, rejectedStylePenalty);
 }
 
 export function scoreItemHeuristic(item: WardrobeItem, context: RecommendationContext) {
@@ -313,7 +358,7 @@ export function scoreCandidate(ids: OutfitItemIds, context: RecommendationContex
   const structureFit = 1 - Math.abs(structuredShare - structureTarget);
   const contextFit = clamp01(weatherFit * 0.36 + formalityFit * 0.27 + occasionFit * 0.15 + colorfulnessFit * 0.1 + layeringFit * 0.06 + structureFit * 0.06);
 
-  const personalFit = clamp01(0.5 + mean(items.map((item) => itemStyleSignal(item, context)), 0));
+  const personalFit = clamp01(0.5 + mean(items.map((item) => itemStyleSignal(item, context)), 0) + outfitPreferenceAdjustment(items, context));
   const formalitySpread = Math.max(...items.map((item) => item.formality)) - Math.min(...items.map((item) => item.formality));
   const structuredCompatibility = clamp01(
     colorCompatibility(items) * 0.31

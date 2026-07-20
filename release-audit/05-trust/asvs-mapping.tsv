@@ -1,0 +1,17 @@
+ASVS 5.0 area	YiYi-relevant control	Evidence	Status
+V1 Architecture	Trust boundaries and provider ownership documented	threat-model.md	pass
+V2 Validation	All API and model inputs use Zod plus image byte validation	upload-boundary.test.ts; ranking-api.test.ts	pass
+V3 Web Frontend	CSP, frame denial, no-sniff, referrer and permissions policy	trust-a11y.spec.ts	pass
+V4 API	Web routes have bounded schemas, no-store errors, abuse protection	rate-limit.test.ts; provider-route-faults.test.ts	pass
+V6 Authentication	No account/auth feature exists in frozen P0	scope review	not-applicable
+V7 Session Management	Voice ephemeral session generation and one active owner	voice-session-coordinator.test.ts	pass
+V8 Authorization	No multi-user server data store exists in frozen architecture	scope review	not-applicable
+V9 Self-contained tokens	Ephemeral OpenAI token never logged or persisted	diagnostic field allowlist; secret scan	pass
+V10 OAuth/OIDC	No OAuth/OIDC flow exists	scope review	not-applicable
+V11 Cryptography	TLS provider URLs; no custom cryptography	source review	pass
+V12 Secure Communication	HTTPS provider endpoints and CSP connect allowlist	next.config.ts	pass
+V13 Configuration	Live production provider routes fail closed without distributed limiter	rate-limit.test.ts	pass
+V14 Data Protection	Local reset, no-store API responses, no image/audio logging	app-data-reset.test.ts; responses.ts	pass
+V15 Secure Coding	Strict TypeScript, canonical validation, no any bypass	typecheck	pass
+V16 Security Logging	Structured allowlisted metadata; no prompt/transcript/image	payload tests and secret scan	pass
+V17 Error Handling	Sanitized labeled errors without provider text	provider-route-faults.test.ts	pass

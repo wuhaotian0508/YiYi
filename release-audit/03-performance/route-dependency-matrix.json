@@ -1,0 +1,9 @@
+{
+  "motion": { "routes": ["all"], "reason": "root MotionConfig and shared runtime presence/layout", "owns": ["runtime layout", "presence", "micro-interaction"] },
+  "gsap": { "routes": ["/", "/onboarding"], "productionReviewRoutes": [], "owns": ["authored onboarding timeline", "TextPlugin"] },
+  "swiper": { "routes": ["/today"], "cssRoutes": ["/today"], "owns": ["Today-Wardrobe pager track transform"] },
+  "openaiAgentsRealtime": { "routes": ["/today", "/preferences"], "owns": ["RealtimeSession browser transport"] },
+  "openaiServerSdk": { "routes": ["/api/realtime/token", "/api/outfits/rank", "/api/wardrobe/process"], "clientBundleMatches": 0 },
+  "dexie": { "routes": ["/today", "/wardrobe", "/wardrobe/add", "/wardrobe/[itemId]", "/preferences", "/settings"] },
+  "developmentReviewCode": { "productionRealModuleMatches": 0, "productionRoutes": { "/motion-review": 404, "/calibration-lab": 404 } }
+}

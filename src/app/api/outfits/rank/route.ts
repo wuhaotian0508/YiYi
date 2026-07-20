@@ -5,7 +5,8 @@ import { DailyIntentSchema, OutfitRankingResultSchema, WeatherContextSchema } fr
 import { validateRankingReferences } from "@/domain/recommendation/engine";
 import { apiError, noStoreJson } from "@/lib/api/responses";
 import { providerRoutesAllowed, takeRateLimit } from "@/lib/api/rate-limit";
-import { logApiDiagnostic, responseRequestId, responseUsage, safeErrorMetadata } from "@/lib/api/diagnostics";
+import { logApiDiagnostic, responseRequestId, responseUsage, safeErrorMetadata, type ApiDiagnostic } from "@/lib/api/diagnostics";
+import { openAIClientOptions, providerTimeoutMs } from "@/lib/api/provider-policy";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -24,7 +25,25 @@ const RankRequestSchema = z.object({
     boardBytes: z.number().int().positive().max(240_000),
     boardWidth: z.number().int().min(256).max(1024),
     boardHeight: z.number().int().min(256).max(1280),
-  }).strict()).min(1).max(8),
+  }).strict().superRefine((candidate, context) => {
+    const match = /^data:(image\/(?:webp|png));base64,([A-Za-z0-9+/]*={0,2})$/.exec(candidate.boardDataUrl);
+    if (!match) {
+      context.addIssue({ code: "custom", path: ["boardDataUrl"], message: "Invalid board encoding" });
+      return;
+    }
+    const decoded = Buffer.from(match[2], "base64");
+    const magicValid = match[1] === "image/png"
+      ? decoded.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      : decoded.subarray(0, 4).toString("ascii") === "RIFF" && decoded.subarray(8, 12).toString("ascii") === "WEBP";
+    if (!magicValid || decoded.byteLength !== candidate.boardBytes) {
+      context.addIssue({ code: "custom", path: ["boardDataUrl"], message: "Board bytes do not match the declared image" });
+    }
+  })).min(1).max(8),
+  correlation: z.object({
+    recommendationOperationId: z.string().min(1).max(160).regex(/^[a-zA-Z0-9_.:-]+$/),
+    profileVersion: z.number().int().nonnegative(),
+    outfitVersion: z.string().uuid().nullable(),
+  }).strict().optional(),
 }).strict();
 
 function boardMime(dataUrl: string): "image/webp" | "image/png" {
@@ -62,17 +81,21 @@ async function runCompatibilityStage(input: z.infer<typeof RankRequestSchema>, s
 }
 
 export async function POST(request: Request) {
-  const requestId = crypto.randomUUID();
+  let requestId = crypto.randomUUID();
+  let correlation: Pick<ApiDiagnostic, "recommendationOperationId" | "profileVersion" | "outfitVersion"> = {};
   const requestedStage = new URL(request.url).searchParams.get("compatibilityStage");
   const compatibilityStage = compatibilityStages.find((stage) => stage === requestedStage);
   if (requestedStage && (!compatibilityStage || process.env.YIYI_RANK_COMPATIBILITY !== "true" || process.env.VERCEL_ENV === "production")) return apiError(requestId, 404, "NOT_FOUND", "Not found.");
   if (!providerRoutesAllowed()) return apiError(requestId, 503, "PUBLIC_PROTECTION_REQUIRED", "Live ranking is not available until production rate protection is configured.", true);
   const rate = await takeRateLimit(request, "outfit-rank", 40);
+  if (!rate.available) return apiError(requestId, 503, "RATE_LIMIT_UNAVAILABLE", "Live ranking protection is temporarily unavailable.", true);
   if (!rate.allowed) return apiError(requestId, 429, "RATE_LIMITED", `Try again in ${rate.retryAfterSeconds} seconds.`, true);
   try {
     const parsed = RankRequestSchema.safeParse(await request.json());
     if (!parsed.success) return apiError(requestId, 400, "INVALID_RANK_REQUEST", "The outfit candidates were invalid.");
     const input = parsed.data;
+    requestId = input.requestId;
+    correlation = input.correlation ?? {};
     const boardBytes = input.candidates.reduce((sum, candidate) => sum + candidate.boardBytes, 0);
     const boardWidth = Math.max(...input.candidates.map((candidate) => candidate.boardWidth));
     const boardHeight = Math.max(...input.candidates.map((candidate) => candidate.boardHeight));
@@ -80,7 +103,7 @@ export async function POST(request: Request) {
     const deterministic = [...input.candidates].sort((a, b) => b.deterministicScore - a.deterministicScore)[0];
     if (process.env.AI_MODE !== "live") return noStoreJson({ requestId, ranking: { selectedCandidateId: deterministic.id, mainReason: "A legal, cohesive answer for today.", candidateScores: [] }, source: "mock", model: null, diagnostics: { requestId, boardBytes, candidateCount: input.candidates.length } });
     if (!process.env.OPENAI_API_KEY) return apiError(requestId, 503, "NOT_CONFIGURED", "Live ranking is not configured.", true);
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = new OpenAI(openAIClientOptions(process.env.OPENAI_API_KEY));
     const model = process.env.OPENAI_RANK_MODEL ?? "gpt-5.6";
     if (compatibilityStage) {
       const compatibilityStartedAt = Date.now();
@@ -102,27 +125,29 @@ export async function POST(request: Request) {
         reasoning: { effort: "none" },
         input: [{ role: "user", content }],
         text: { format: zodTextFormat(OutfitRankingResultSchema, "outfit_ranking") },
-      }, { signal: AbortSignal.timeout(20_000) }).catch((error: unknown) => {
+      }, { signal: AbortSignal.timeout(providerTimeoutMs.outfitRanking) }).catch((error: unknown) => {
       const metadata = safeErrorMetadata(error);
-      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model, outcome: "error", ...metadata, durationMs: Date.now() - providerStartedAt, errorCode: "RANK_PROVIDER_FAILED", candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" });
+      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model, outcome: "error", ...metadata, ...correlation, durationMs: Date.now() - providerStartedAt, errorCode: "RANK_PROVIDER_FAILED", candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" });
       return null;
     });
     if (!response) return apiError(requestId, 502, "RANK_PROVIDER_FAILED", "I’ve put together a simpler option for now.", true);
     const actualModel = response.model || model;
     const parsedRanking = OutfitRankingResultSchema.safeParse(response.output_parsed);
     if (!parsedRanking.success) {
-      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "error", httpStatus: 200, providerRequestId: responseRequestId(response), durationMs: Date.now() - providerStartedAt, errorCode: "INVALID_RANK_OUTPUT", errorType: "InvalidProviderOutput", usage: responseUsage(response), candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" });
+      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "error", ...correlation, httpStatus: 200, providerRequestId: responseRequestId(response), durationMs: Date.now() - providerStartedAt, errorCode: "INVALID_RANK_OUTPUT", errorType: "InvalidProviderOutput", usage: responseUsage(response), candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" });
       return apiError(requestId, 502, "INVALID_RANK_OUTPUT", "I’ve put together a simpler option for now.", true);
     }
     const ranking = parsedRanking.data;
     const candidateIds = input.candidates.map((value) => value.id);
     if (!validateRankingReferences(candidateIds, ranking.selectedCandidateId, ranking.candidateScores.map((entry) => entry.candidateId))) {
-      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "error", httpStatus: 200, providerRequestId: responseRequestId(response), durationMs: Date.now() - providerStartedAt, errorCode: "INVALID_RANK_IDS", errorType: "InvalidProviderOutput", usage: responseUsage(response), candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" });
+      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "error", ...correlation, httpStatus: 200, providerRequestId: responseRequestId(response), durationMs: Date.now() - providerStartedAt, errorCode: "INVALID_RANK_IDS", errorType: "InvalidProviderOutput", usage: responseUsage(response), candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" });
       return noStoreJson({ requestId, ranking: { selectedCandidateId: deterministic.id, mainReason: "A legal, cohesive answer for today.", candidateScores: [] }, source: "fallback", model: actualModel, diagnostics: { requestId, boardBytes, candidateCount: input.candidates.length, errorCode: "INVALID_RANK_IDS" } });
     }
-    logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "success", httpStatus: 200, providerRequestId: responseRequestId(response), durationMs: Date.now() - providerStartedAt, usage: responseUsage(response), candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" });
+    logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "success", ...correlation, httpStatus: 200, providerRequestId: responseRequestId(response), durationMs: Date.now() - providerStartedAt, usage: responseUsage(response), candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" });
     return noStoreJson({ requestId, ranking, source: "live", model: actualModel, diagnostics: { requestId, boardBytes, candidateCount: input.candidates.length } });
-  } catch {
+  } catch (error) {
+    const metadata = safeErrorMetadata(error);
+    logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "application", outcome: "error", ...metadata, ...correlation, durationMs: 0, errorCode: "RANK_FAILED" });
     return apiError(requestId, 500, "RANK_FAILED", "I’ve put together a simpler option for now.", true);
   }
 }

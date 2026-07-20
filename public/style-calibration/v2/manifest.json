@@ -1,0 +1,374 @@
+{
+  "manifestVersion": "1.0",
+  "assetSet": {
+    "id": "yiyi-style-calibration-pairs-v2",
+    "version": "v2",
+    "generatedOn": "2026-07-19",
+    "generator": "OpenAI built-in imagegen",
+    "purpose": "Controlled pairwise style-calibration research assets",
+    "originalProjectAssets": true,
+    "thirdPartyReferenceContent": false,
+    "brandMarksRequested": false,
+    "promptRecordType": "normalized audit reconstruction from the executed prompt",
+    "promptRecordNote": "The prompts below preserve the executed visible composition and wardrobe constraints for audit. They do not claim to reproduce model-internal parameters, defaults, seeds, or hidden instructions."
+  },
+  "sharedPrompt": "Product-mockup image for a YiYi calibration pair. Square composition with exactly two identical faceless matte-white mannequins, using the same warm light-gray seamless studio, camera, scale, and lighting. Show both full outfits head-to-toe, including shoes. Everything is unbranded. No text, logo, watermark, face, hair, skin, jewelry, scenery, or editorial effects.",
+  "promptAssembly": "For each asset, its complete normalized audit prompt is sharedPrompt followed by assets[].prompt.pairSpecific.",
+  "sharedPresentationControls": {
+    "mannequinCount": 2,
+    "mannequinsIdenticalWithinPair": true,
+    "mannequinsFaceless": true,
+    "mannequinFinish": "matte white",
+    "fullOutfitsVisible": true,
+    "shoesVisible": true,
+    "studio": "warm light-gray seamless",
+    "matchedCameraScaleAndLighting": true,
+    "visibleBrandMarks": false
+  },
+  "runtimePresentation": {
+    "counterbalanced": true,
+    "strategy": "session-seeded alternating A/B left-right order",
+    "imageHandling": "source halves are repositioned without mirroring garments",
+    "responseProvenance": "actual left-to-right order is stored on every new calibration response"
+  },
+  "sharedKnownBiasFlags": [
+    "source-render-side-confound",
+    "single-synthetic-render-per-concept",
+    "mannequin-body-proportion-bias",
+    "western-contemporary-wardrobe-bias",
+    "synthetic-image-artifact-bias",
+    "style-axis-covaries-with-garment-details"
+  ],
+  "assets": [
+    {
+      "id": "pair-classic-trend",
+      "repositoryPath": "public/style-calibration/v2/pair-classic-trend.webp",
+      "publicPath": "/style-calibration/v2/pair-classic-trend.webp",
+      "version": "v2",
+      "conceptPair": {
+        "left": "classic",
+        "right": "trend-aware"
+      },
+      "dimensions": {
+        "width": 1254,
+        "height": 1254,
+        "unit": "px"
+      },
+      "mimeType": "image/webp",
+      "byteLength": 92940,
+      "sha256": "312b9aadfa2dac5a3d89d902f9e5d7079ee5ea4ebac03796025a6282708b062a",
+      "generation": {
+        "service": "OpenAI built-in imagegen",
+        "date": "2026-07-19"
+      },
+      "originality": {
+        "originalProjectAsset": true,
+        "thirdPartyReferenceContent": false,
+        "brandMarksRequested": false,
+        "visibleBrandMarksObserved": false
+      },
+      "presentationControls": {
+        "facelessIdenticalMannequins": true,
+        "matchedStudioCameraScaleAndLighting": true,
+        "fullOutfitsIncludingShoes": true
+      },
+      "prompt": {
+        "recordType": "normalized audit reconstruction from the executed prompt",
+        "commonPromptRef": "#/sharedPrompt",
+        "pairSpecific": "LEFT: navy trench, ivory-and-navy striped knit, dark-indigo straight jeans, and brown loafers. RIGHT: cropped boxy deep-gray jacket, asymmetric ivory knit, barrel jeans, and modern off-white sneakers."
+      },
+      "knownBiasFlags": [
+        "source-render-side-confound",
+        "single-synthetic-render-per-concept",
+        "mannequin-body-proportion-bias",
+        "western-contemporary-wardrobe-bias",
+        "synthetic-image-artifact-bias",
+        "classic-trend-axis-also-changes-outerwear-length-denim-silhouette-and-footwear"
+      ],
+      "humanReview": {
+        "status": "reviewed-with-known-limitations",
+        "date": "2026-07-19",
+        "dimensionsVerified": true,
+        "fullOutfitsVerified": true,
+        "facelessPairVerified": true,
+        "noVisibleBrandMarksVerified": true,
+        "note": "Visually reviewed for asset integrity and prompt-visible constraints; suitable for calibration-lab evaluation, not evidence that preference bias is eliminated."
+      }
+    },
+    {
+      "id": "pair-fitted-oversized",
+      "repositoryPath": "public/style-calibration/v2/pair-fitted-oversized.webp",
+      "publicPath": "/style-calibration/v2/pair-fitted-oversized.webp",
+      "version": "v2",
+      "conceptPair": {
+        "left": "fitted",
+        "right": "oversized"
+      },
+      "dimensions": {
+        "width": 1254,
+        "height": 1254,
+        "unit": "px"
+      },
+      "mimeType": "image/webp",
+      "byteLength": 59524,
+      "sha256": "05b582703e4b450c70e4f080725ff85e2cd51debd7e0aa6f4e71c34587485258",
+      "generation": {
+        "service": "OpenAI built-in imagegen",
+        "date": "2026-07-19"
+      },
+      "originality": {
+        "originalProjectAsset": true,
+        "thirdPartyReferenceContent": false,
+        "brandMarksRequested": false,
+        "visibleBrandMarksObserved": false
+      },
+      "presentationControls": {
+        "facelessIdenticalMannequins": true,
+        "matchedStudioCameraScaleAndLighting": true,
+        "fullOutfitsIncludingShoes": true
+      },
+      "prompt": {
+        "recordType": "normalized audit reconstruction from the executed prompt",
+        "commonPromptRef": "#/sharedPrompt",
+        "pairSpecific": "LEFT: fitted navy knit, defined-waist straight charcoal trousers, and slim black ankle boots. RIGHT: oversized navy knit, wide charcoal pleated trousers, and substantial black shoes. Keep the same palette and formality on both sides."
+      },
+      "knownBiasFlags": [
+        "source-render-side-confound",
+        "single-synthetic-render-per-concept",
+        "mannequin-body-proportion-bias",
+        "western-contemporary-wardrobe-bias",
+        "synthetic-image-artifact-bias",
+        "fit-axis-also-changes-knit-construction-trouser-drape-and-shoe-volume"
+      ],
+      "humanReview": {
+        "status": "reviewed-with-known-limitations",
+        "date": "2026-07-19",
+        "dimensionsVerified": true,
+        "fullOutfitsVerified": true,
+        "facelessPairVerified": true,
+        "noVisibleBrandMarksVerified": true,
+        "note": "Visually reviewed for asset integrity and prompt-visible constraints; suitable for calibration-lab evaluation, not evidence that preference bias is eliminated."
+      }
+    },
+    {
+      "id": "pair-minimal-expressive",
+      "repositoryPath": "public/style-calibration/v2/pair-minimal-expressive.webp",
+      "publicPath": "/style-calibration/v2/pair-minimal-expressive.webp",
+      "version": "v2",
+      "conceptPair": {
+        "left": "minimal",
+        "right": "expressive"
+      },
+      "dimensions": {
+        "width": 1254,
+        "height": 1254,
+        "unit": "px"
+      },
+      "mimeType": "image/webp",
+      "byteLength": 55134,
+      "sha256": "963ab5c437fe543a60bdd5db132c1a8c2f5644a504f4e029de27787ee1fe2e6f",
+      "generation": {
+        "service": "OpenAI built-in imagegen",
+        "date": "2026-07-19"
+      },
+      "originality": {
+        "originalProjectAsset": true,
+        "thirdPartyReferenceContent": false,
+        "brandMarksRequested": false,
+        "visibleBrandMarksObserved": false
+      },
+      "presentationControls": {
+        "facelessIdenticalMannequins": true,
+        "matchedStudioCameraScaleAndLighting": true,
+        "fullOutfitsIncludingShoes": true
+      },
+      "prompt": {
+        "recordType": "normalized audit reconstruction from the executed prompt",
+        "commonPromptRef": "#/sharedPrompt",
+        "pairSpecific": "LEFT: black mock-neck, straight black trousers, and black loafers. RIGHT: cobalt shirt, ivory top, burgundy wide trousers, mustard sneakers, and a small red crossbody bag. Keep both silhouettes similarly relaxed."
+      },
+      "knownBiasFlags": [
+        "source-render-side-confound",
+        "single-synthetic-render-per-concept",
+        "mannequin-body-proportion-bias",
+        "western-contemporary-wardrobe-bias",
+        "synthetic-image-artifact-bias",
+        "minimal-expressive-axis-also-changes-palette-accessory-count-trouser-volume-and-footwear"
+      ],
+      "humanReview": {
+        "status": "reviewed-with-known-limitations",
+        "date": "2026-07-19",
+        "dimensionsVerified": true,
+        "fullOutfitsVerified": true,
+        "facelessPairVerified": true,
+        "noVisibleBrandMarksVerified": true,
+        "note": "Visually reviewed for asset integrity and prompt-visible constraints; suitable for calibration-lab evaluation, not evidence that preference bias is eliminated."
+      }
+    },
+    {
+      "id": "pair-relaxed-polished",
+      "repositoryPath": "public/style-calibration/v2/pair-relaxed-polished.webp",
+      "publicPath": "/style-calibration/v2/pair-relaxed-polished.webp",
+      "version": "v2",
+      "conceptPair": {
+        "left": "relaxed",
+        "right": "polished"
+      },
+      "dimensions": {
+        "width": 1254,
+        "height": 1254,
+        "unit": "px"
+      },
+      "mimeType": "image/webp",
+      "byteLength": 90738,
+      "sha256": "b5b85ef010c1f006783296a125ff923811a1555e8a78f06291d3b7786c29453c",
+      "generation": {
+        "service": "OpenAI built-in imagegen",
+        "date": "2026-07-19"
+      },
+      "originality": {
+        "originalProjectAsset": true,
+        "thirdPartyReferenceContent": false,
+        "brandMarksRequested": false,
+        "visibleBrandMarksObserved": false
+      },
+      "presentationControls": {
+        "facelessIdenticalMannequins": true,
+        "matchedStudioCameraScaleAndLighting": true,
+        "fullOutfitsIncludingShoes": true
+      },
+      "prompt": {
+        "recordType": "normalized audit reconstruction from the executed prompt",
+        "commonPromptRef": "#/sharedPrompt",
+        "pairSpecific": "LEFT: oatmeal relaxed cardigan, white crew top, loose light-blue jeans, and white sneakers. RIGHT: charcoal tailored blazer, black fine knit, pressed charcoal trousers, and black loafers."
+      },
+      "knownBiasFlags": [
+        "source-render-side-confound",
+        "single-synthetic-render-per-concept",
+        "mannequin-body-proportion-bias",
+        "western-contemporary-wardrobe-bias",
+        "synthetic-image-artifact-bias",
+        "relaxed-polished-axis-also-changes-palette-tailoring-denim-and-footwear"
+      ],
+      "humanReview": {
+        "status": "reviewed-with-known-limitations",
+        "date": "2026-07-19",
+        "dimensionsVerified": true,
+        "fullOutfitsVerified": true,
+        "facelessPairVerified": true,
+        "noVisibleBrandMarksVerified": true,
+        "note": "Visually reviewed for asset integrity and prompt-visible constraints; suitable for calibration-lab evaluation, not evidence that preference bias is eliminated."
+      }
+    },
+    {
+      "id": "pair-soft-utility",
+      "repositoryPath": "public/style-calibration/v2/pair-soft-utility.webp",
+      "publicPath": "/style-calibration/v2/pair-soft-utility.webp",
+      "version": "v2",
+      "conceptPair": {
+        "left": "soft",
+        "right": "utility"
+      },
+      "dimensions": {
+        "width": 1254,
+        "height": 1254,
+        "unit": "px"
+      },
+      "mimeType": "image/webp",
+      "byteLength": 60142,
+      "sha256": "028bd015382d17d4c676e2382c05a9deebf6a839e6ddfdba258e732c441927c8",
+      "generation": {
+        "service": "OpenAI built-in imagegen",
+        "date": "2026-07-19"
+      },
+      "originality": {
+        "originalProjectAsset": true,
+        "thirdPartyReferenceContent": false,
+        "brandMarksRequested": false,
+        "visibleBrandMarksObserved": false
+      },
+      "presentationControls": {
+        "facelessIdenticalMannequins": true,
+        "matchedStudioCameraScaleAndLighting": true,
+        "fullOutfitsIncludingShoes": true
+      },
+      "prompt": {
+        "recordType": "normalized audit reconstruction from the executed prompt",
+        "commonPromptRef": "#/sharedPrompt",
+        "pairSpecific": "LEFT: cream brushed cardigan, oatmeal top, fluid ivory wide trousers, and taupe suede flats. RIGHT: olive chore jacket, black crew top, charcoal cargo trousers, and brown ankle boots."
+      },
+      "knownBiasFlags": [
+        "source-render-side-confound",
+        "single-synthetic-render-per-concept",
+        "mannequin-body-proportion-bias",
+        "western-contemporary-wardrobe-bias",
+        "synthetic-image-artifact-bias",
+        "soft-utility-axis-also-changes-lightness-material-trouser-construction-and-footwear"
+      ],
+      "humanReview": {
+        "status": "reviewed-with-known-limitations",
+        "date": "2026-07-19",
+        "dimensionsVerified": true,
+        "fullOutfitsVerified": true,
+        "facelessPairVerified": true,
+        "noVisibleBrandMarksVerified": true,
+        "note": "Visually reviewed for asset integrity and prompt-visible constraints; suitable for calibration-lab evaluation, not evidence that preference bias is eliminated."
+      }
+    },
+    {
+      "id": "pair-tonal-graphic",
+      "repositoryPath": "public/style-calibration/v2/pair-tonal-graphic.webp",
+      "publicPath": "/style-calibration/v2/pair-tonal-graphic.webp",
+      "version": "v2",
+      "conceptPair": {
+        "left": "tonal",
+        "right": "graphic"
+      },
+      "dimensions": {
+        "width": 1254,
+        "height": 1254,
+        "unit": "px"
+      },
+      "mimeType": "image/webp",
+      "byteLength": 84282,
+      "sha256": "61f8ec67cdf9edca7c02a96ac8ddb34afffea92564adfce02f2ae166d839bc20",
+      "generation": {
+        "service": "OpenAI built-in imagegen",
+        "date": "2026-07-19"
+      },
+      "originality": {
+        "originalProjectAsset": true,
+        "thirdPartyReferenceContent": false,
+        "brandMarksRequested": false,
+        "visibleBrandMarksObserved": false
+      },
+      "presentationControls": {
+        "facelessIdenticalMannequins": true,
+        "matchedStudioCameraScaleAndLighting": true,
+        "fullOutfitsIncludingShoes": true
+      },
+      "prompt": {
+        "recordType": "normalized audit reconstruction from the executed prompt",
+        "commonPromptRef": "#/sharedPrompt",
+        "pairSpecific": "LEFT: tonal warm-gray overshirt, top, trousers, and gray sneakers. RIGHT: black-and-ivory broad-striped overshirt, ivory top, dark-green straight trousers, and black sneakers. Match silhouette, material, and formality across both sides."
+      },
+      "knownBiasFlags": [
+        "source-render-side-confound",
+        "single-synthetic-render-per-concept",
+        "mannequin-body-proportion-bias",
+        "western-contemporary-wardrobe-bias",
+        "synthetic-image-artifact-bias",
+        "tonal-graphic-axis-also-changes-palette-and-outer-layer-pattern"
+      ],
+      "humanReview": {
+        "status": "reviewed-with-known-limitations",
+        "date": "2026-07-19",
+        "dimensionsVerified": true,
+        "fullOutfitsVerified": true,
+        "facelessPairVerified": true,
+        "noVisibleBrandMarksVerified": true,
+        "note": "Visually reviewed for asset integrity and prompt-visible constraints; suitable for calibration-lab evaluation, not evidence that preference bias is eliminated."
+      }
+    }
+  ]
+}

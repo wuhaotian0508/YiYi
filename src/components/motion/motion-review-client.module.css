@@ -1,0 +1,194 @@
+.root {
+  min-height: 100dvh;
+  background: #ececef;
+  color: #111;
+  padding: 12px;
+}
+
+.root[data-motion-mode="reduced"] :global([data-story-caret]) {
+  animation: none !important;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  max-width: 1120px;
+  margin: 0 auto 12px;
+  padding: 10px;
+  border: 1px solid #d9d9de;
+  border-radius: 16px;
+  background: rgb(255 255 255 / .94);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 8px 30px rgb(0 0 0 / .08);
+  display: grid;
+  gap: 8px;
+}
+
+.toolbarRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.toolbar button,
+.toolbar select {
+  min-height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid #dedee3;
+  border-radius: 999px;
+  background: #fff;
+  padding: 0 11px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.toolbar button[data-active="true"] {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.stage {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.device {
+  position: relative;
+  overflow: hidden;
+  border-radius: 32px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgb(17 17 17 / .13), 0 24px 70px rgb(0 0 0 / .14);
+}
+
+.device :global(.phone-page) {
+  width: 100%;
+  min-height: 100%;
+  height: 100%;
+  box-shadow: none;
+}
+
+.simpleScenario {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: max(18px, env(safe-area-inset-top)) 20px max(18px, env(safe-area-inset-bottom));
+}
+
+.onboardingReview {
+  position: absolute;
+  inset: 0;
+}
+
+.reviewControlsHost:empty {
+  display: none;
+}
+
+.timelineOverlay {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid rgb(17 17 17 / .1);
+  border-radius: 14px;
+  background: rgb(255 255 255 / .94);
+  backdrop-filter: blur(14px);
+}
+
+.timelineOverlay select,
+.timelineOverlay button {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid #dedee3;
+  border-radius: 999px;
+  background: white;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.timelineOverlay select { flex: 1; }
+
+.simpleScenario > h1 {
+  margin: 12px 0 4px;
+  font-size: 24px;
+  letter-spacing: -.035em;
+}
+
+.simpleScenario > p {
+  margin: 0 0 18px;
+  color: #77777d;
+  font-size: 13px;
+}
+
+.stateRail,
+.scenarioActions,
+.labels {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 3px 0;
+}
+
+.stateRail button,
+.scenarioActions button,
+.labels button {
+  min-height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid #e1e1e5;
+  border-radius: 999px;
+  background: white;
+  padding: 0 12px;
+}
+
+.stateRail button[aria-pressed="true"],
+.scenarioActions button[aria-pressed="true"] {
+  background: #111;
+  color: white;
+}
+
+.voicePreview {
+  flex: 1;
+  display: grid;
+  place-items: center;
+}
+
+.outfitPreview {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.outfitPreview :global(.outfit-canvas) {
+  width: 100%;
+  height: min(54dvh, 455px);
+}
+
+.devtools {
+  position: relative;
+  flex: 1 0 100%;
+  min-width: 0;
+  min-height: 42px;
+}
+
+.devtools :global(.gs-dev-tools) {
+  position: relative !important;
+  inset: auto !important;
+  width: 100% !important;
+}
+
+.sheetLaunch {
+  margin-top: auto;
+}
+
+@media (max-width: 700px) {
+  .root { padding: 0; }
+  .toolbar { position: relative; border-radius: 0; margin-bottom: 0; }
+  .device { border-radius: 0; box-shadow: none; }
+}

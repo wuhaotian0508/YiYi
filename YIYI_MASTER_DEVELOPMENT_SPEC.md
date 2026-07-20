@@ -12,7 +12,7 @@
 
 ---
 
-> **Current product decision — 2026-07-17:** This file preserves the original frozen planning baseline. The repository owner subsequently superseded its exposed-alternatives and fixed-count calibration rules. The current implementation and the root contracts (`PRODUCT_SPEC.md`, `ARCHITECTURE.md`, `DATA_MODEL.md`, `API_CONTRACTS.md`, and `TEST_PLAN.md`) display exactly one current recommendation, keep candidate pools request-scoped, use real displayed-state history for Undo, and allow flexible like/dislike/skip calibration. Those decisions take precedence wherever this historical baseline differs.
+> **Current product decision — updated 2026-07-19:** This file preserves the original frozen planning baseline. The repository owner subsequently superseded its exposed-alternatives and fixed-count calibration rules. The current implementation and the root contracts (`PRODUCT_SPEC.md`, `ARCHITECTURE.md`, `DATA_MODEL.md`, `API_CONTRACTS.md`, and `TEST_PLAN.md`) display exactly one current recommendation, keep candidate pools request-scoped, use real displayed-state history for Undo, and use a versioned matched-pair calibration with A/B/Both/Neither/Skip, confidence-aware optional follow-ups, canonical signal provenance, and editable Profile review. Those decisions take precedence wherever this historical baseline differs.
 
 ---
 
@@ -267,54 +267,45 @@ Implementation note: call `navigator.mediaDevices.getUserMedia({ audio: true })`
 
 ## 2.4 Style calibration
 
-### Likes
+The original “choose exactly three, then reject exactly one” flow is superseded.
 
-> **Which looks feel most like you?**
+Ask what the user would actually wear through matched outfit pairs. The normal onboarding contains four base comparisons and, only when confidence remains low, up to two optional follow-ups. The user may finish at any time; two consecutive Skips end the flow early.
 
-> **Choose three. Don’t overthink it.**
+Each question offers:
 
-Show six visually diverse outfit references. User selects exactly three.
+- **A feels like me**
+- **B feels like me**
+- **Both**
+- **Neither**
+- **Skip**
 
-### Least like
+Canonical meaning:
 
-> **Which one feels least like you?**
+- A/B: the chosen option is `more`; the relative loser is `unknown`, never `less`.
+- Both: both options are lower-differentiation positive evidence.
+- Neither: both options are explicit, editable, soft negative onboarding evidence.
+- Skip: no preference signal and no confidence increase.
 
-Select exactly one.
+The v2 catalog contains six versioned 1254×1254 WebP boards. Each uses matching faceless mannequins, neutral background, full-outfit framing, stable scale/light, and contain rendering. A session-stable seed alternates canonical A/B across the left and right positions without mirroring the clothes; each response records its presentation order and edits preserve it. The manifest records generation provenance and residual source-render confounds. These controls reduce presentation bias but do not prove it has been eliminated for people.
 
-### Explicit avoids
+Wardrobe direction is collected separately as descriptive metadata about clothes the user expects to add. It is not gender identity and is excluded from recommendation summaries, constraints, and scoring.
 
-> **Anything YiYi should usually avoid?**
+### Fine-tune and Profile review
 
-Preset chips:
-
-- Heels
-- Tight fits
-- Cropped tops
-- Short skirts
-- Bright colors
-- Formal looks
-- Gold-tone jewelry
-- Silver-tone jewelry
-
-Voice option:
-
-> **Tell YiYi something else**
-
-Generated summary:
+After pairwise calibration, offer structured **More of** and **Less of** chips plus bottom-reachable voice input. Voice returns a strict semantic preference delta. A raw transcript never becomes the displayed or stored result by itself, and success appears only after Dexie persistence. Safely structured long-term preferences become active; ambiguous prose is retained as inactive **Needs review** and can be removed or replaced.
 
 > **Your style so far**
 
-Example:
+Show:
 
-> Relaxed, clean, slightly cool-toned  
-> Comfort over formality  
-> Avoids heels and overly mature looks
+- Wardrobe description;
+- learning confidence and evidence count;
+- More of;
+- Less of;
+- Still open (Unknown relative evidence);
+- Needs your review, when present.
 
-CTA:
-
-> **Looks right**
-
-This is a deterministic local calculation from pre-annotated style images. Do not spend an AI request analyzing these fixed onboarding images.
+Provide Back, Edit comparisons, Undo last answer, and Looks right. Re-editing comparisons must preserve explicit Fine-tune signals and evidence. The catalog and projection are deterministic local TypeScript; do not spend an AI request analyzing fixed onboarding images.
 
 ## 2.5 Wardrobe setup branch
 
@@ -638,12 +629,13 @@ Memory:
 
 Sections:
 
-- Your style
-- Usually avoid
-- Comfort
-- Jewelry preference
+- Wardrobe description (descriptive only)
+- More of
+- Less of
+- Needs review, when present
+- Clear-evidence explanation
 
-Every memory can be edited or deleted. Never hide learned preferences from the user.
+Active canonical signals affect recommendation; Unknown, Needs review, deleted, contextual, and zero-confidence signals do not. Memories remain visible and removable or replaceable; never hide learned preferences from the user.
 
 ---
 
@@ -1173,23 +1165,20 @@ const StyleVectorSchema = z.object({
 });
 ```
 
-Preference profile:
+The canonical profile is schema v2 and contains:
 
-```ts
-const PreferenceProfileSchema = z.object({
-  id: z.literal("default"),
-  styleVector: StyleVectorSchema,
-  hardAvoids: z.array(PreferenceRuleSchema),
-  softPreferences: z.array(PreferenceRuleSchema),
-  preferredMetals: z.array(z.enum(["gold", "silver", "mixed"])),
-  comfortWeight: z.number().min(0).max(1),
-  formalityBias: z.number().min(-1).max(1),
-  evidence: z.array(PreferenceEvidenceSchema).max(100),
-  updatedAt: z.number(),
-});
-```
+- origin/revision and Demo/Personal provenance;
+- descriptive `wardrobeDirection`;
+- versioned `calibrationResponses`, including the actual counterbalanced left-to-right presentation order;
+- canonical `preferenceSignals` with stable ID, structured attribute/value, `more | less | unknown`, strength, confidence, scope, categories/slots, permanence, editability, status, semantic features where relevant, and source provenance;
+- `profileConfidence` (`evidence`, `coverage`, `differentiation`, `overall`);
+- confidence-shrunk style vector and up to four style anchors;
+- derived compatibility fields (`hardAvoids`, `softPreferences`, notes, metals);
+- bounded evidence and timestamps.
 
-Only explicit “always / never / usually / generally” statements or repeated evidence may become long-term memory.
+`preferenceSignals` are the truth source when present. Derived notes/rules cannot preserve deleted, review-only, Unknown, or contextual influence. Hard positive preferences are invalid; hard strength is reserved for explicit negative structured rules. An onboarding click cannot become a permanent hard avoid.
+
+Only explicit structured long-term language, a direct remember request, or sufficiently repeated cross-context evidence may become durable memory. A one-day need, one revision, or one confirmation remains contextual. Raw freeform language that cannot be safely structured stays editable with zero ranking effect.
 
 ## 6.7 Daily intent
 
@@ -1303,7 +1292,13 @@ processingJobs:
 &id, status, createdAt
 ```
 
-Create explicit Dexie version 1 and a migration pattern even if only v1 exists.
+The current database version is Dexie v6. Keep every migration additive and executable from real older databases:
+
+- v4 adds profile provenance/style anchors and session shown-set/operation generation;
+- v5 removes invalid hard-positive rule semantics;
+- v6 normalizes canonical preference-signal defaults, recognizes canned Demo fingerprints, and quarantines legacy preferences without trustworthy provenance as zero-confidence `needs_review` records while clearing or bypassing their scoring projections.
+
+Demo item IDs and provenance are stored explicitly. Demo → Personal removes Demo items/images and stale sessions/versions. A canned Demo profile is removed or materialized from explicitly sourced personal canonical signals only; example assumptions never become Personal preferences by default.
 
 ## 7.2 Storage policy
 
@@ -1553,6 +1548,7 @@ interface VoiceSessionAdapter {
   mute(muted: boolean): void;
   onState(listener: (state: VoiceState) => void): () => void;
   onTranscript(listener: (transcript: TranscriptState) => void): () => void;
+  onFailure(listener: (failure: VoiceConnectionFailure) => void): () => void;
 }
 ```
 
@@ -1562,6 +1558,8 @@ Implement:
 - `MockVoiceSessionAdapter`
 
 React components never talk directly to SDK transport details.
+
+An app-level `VoiceSessionCoordinator` is the sole owner of the active adapter, pending connect promise, session generation, lifecycle snapshot, and pending teardown. Today and Fine-tune use separate agent contexts but acquire this same mutually exclusive owner. Repeated calls by one owner reuse the pending promise or healthy session; a different owner receives a busy failure. New starts wait until the previous adapter has fully closed.
 
 ## 9.2 Ephemeral token route
 
@@ -1576,7 +1574,7 @@ Backend:
 5. never caches;
 6. never logs the token.
 
-Token is minted only when the user explicitly starts a session.
+Token is minted only when the user explicitly starts a genuinely new session. Page phase, render, transcript, tool, and recommendation changes never fetch a token. A rate-limited response includes `Retry-After`; the client enters a cooldown and never automatically retries.
 
 ## 9.3 Realtime agent
 
@@ -1587,9 +1585,9 @@ Development model: `gpt-realtime-2.1-mini`.
 
 Initial voice: configure through `OPENAI_REALTIME_VOICE`; use `marin` only if supported by the installed API version.
 
-Use typed SDK session configuration. Configure semantic VAD with medium eagerness and interruption when the installed SDK types support it. Do not bypass TypeScript with `as any` to force an outdated config shape.
+Use typed SDK session configuration. Configure semantic VAD with low eagerness and interruption when the installed SDK types support it. Do not bypass TypeScript with `as any` to force an outdated config shape.
 
-The adapter maps SDK typed events into:
+The adapter maps SDK typed events into one coordinator snapshot:
 
 - idle;
 - connecting;
@@ -1598,6 +1596,8 @@ The adapter maps SDK typed events into:
 - speaking;
 - interrupted;
 - error.
+
+The coordinator adds `rate_limited` and makes all lifecycle states mutually exclusive. Recommendation/page phases are separate presentation state and cannot override connection health. Attempt and generation IDs reject obsolete listeners and tool results; cleanup invalidates the generation before closing the SDK session and serializes a replacement start behind teardown.
 
 Use the SDK’s local history for final user transcripts. For partial transcript deltas, use only documented typed transport events from the installed version. Do not parse arbitrary untyped event strings across the UI.
 
@@ -1685,13 +1685,9 @@ Execution updates Dexie and re-runs recommendation if the active outfit becomes 
 
 ### `save_explicit_preference`
 
-Input:
+Input is a strict `PreferenceDelta`: action/signal ID, structured attribute and value, editable label, polarity, soft/hard strength, global/category scope, optional categories/slots/combination values, confidence, review status, and a concise semantic evidence summary. Combination dislikes remain conjunctive and cannot expand into multiple atomic bans.
 
-- preference rule;
-- polarity;
-- evidence phrase.
-
-Only use for clearly explicit/repeated long-term preferences.
+Only use for clearly explicit/repeated long-term preferences. If meaning cannot be represented safely, save an inactive `preference_note` with `needsReview=true` or ask for clarification; never manufacture a hard rule. The tool returns success only after the canonical mutation is persisted. Fine-tune and Today use the same schema and persistence semantics.
 
 Tool results must be small, serializable objects. Tool exceptions are transformed into short model-visible failure messages. Apply per-tool timeouts.
 
@@ -2303,6 +2299,15 @@ Required:
 - stale request rejection;
 - DailyIntent tag edit;
 - preference memory rules;
+- matched-pair catalog and A/B/Both/Neither/Skip semantics;
+- all-positive creates no Less and all-Skip stays neutral;
+- Unknown, Needs review, deleted, contextual, and zero-confidence signals never score;
+- calibration/profile confidence is bounded, order-independent, and idempotent;
+- equal feedback counts over different looks produce different semantic profiles;
+- explicit Fine-tune signals survive calibration Edit/Undo;
+- strict voice delta persistence and no transcript-only success;
+- concurrent preference add/delete is serialized without lost writes;
+- real v1/v5 → v6 migration, canned Demo recognition, and Demo → Personal isolation;
 - rank output ID validation.
 
 ## 18.2 Integration tests
@@ -2312,13 +2317,17 @@ With mocks:
 1. first launch;
 2. teaching onboarding;
 3. microphone granted mock;
-4. style calibration;
-5. seed example wardrobe;
-6. voice fixture produces DailyIntent;
-7. recommendation appears;
-8. bag revision;
-9. confirmation;
-10. refresh recovers confirmed outfit.
+4. descriptive wardrobe direction;
+5. matched-pair calibration, optional follow-up, Skip, and edit/undo;
+6. Fine-tune structured chip/voice persistence and Profile review;
+7. example or Personal wardrobe branch with Demo isolation;
+8. voice fixture produces DailyIntent;
+9. recommendation appears;
+10. bag revision;
+11. confirmation;
+12. refresh recovers confirmed outfit.
+
+The gated `/calibration-lab` is a non-persistent research surface for pairwise versus legacy single-card interaction, controlled versus model-photo presentation, A-left/B-left order, scripted response sequences, confidence/vector output, and deterministic recommendation counterfactuals. Automated tests prove canonical presentation-order invariance and that explicit negative full-look evidence lowers the matching outfit's personal-fit score without manufacturing an opposite style. They do not prove human perceptual bias is eliminated; synthetic rendering, source-side artifacts, body proportions, cultural coverage, and within-axis garment covariance remain study risks.
 
 Image path:
 
@@ -2448,7 +2457,7 @@ Deliver every reference page/state using fixtures:
 - splash;
 - onboarding;
 - permission gate;
-- style calibration;
+- matched-pair style calibration and Profile review;
 - wardrobe;
 - item review and sheets;
 - Today voice states;

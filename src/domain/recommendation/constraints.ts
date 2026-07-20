@@ -1,4 +1,6 @@
 import { OutfitItemIdsSchema, type OutfitItemIds, type OutfitSlot, type WardrobeItem } from "@/domain/schemas";
+import { activeLongTermPreferenceSignals } from "@/domain/preferences/profile-mutations";
+import { matchesPreferenceSignal, outfitMatchesCombinationSignal } from "@/domain/preferences/preference-matching";
 import { RecommendationError, type RecommendationContext } from "@/domain/recommendation/context";
 import { colorIds } from "@/domain/taxonomy";
 
@@ -67,8 +69,15 @@ function ruleMentionsAnotherCategory(value: string, item: WardrobeItem) {
 }
 
 function hardAvoidReason(item: WardrobeItem, context: RecommendationContext) {
+  if (context.profile.preferenceSignals !== undefined) {
+    const signal = activeLongTermPreferenceSignals(context.profile).find((entry) => entry.strength === "hard"
+      && entry.polarity === "less"
+      && entry.attribute !== "combination"
+      && matchesPreferenceSignal(item, entry));
+    if (signal) return signal.label;
+  }
   const rules = [
-    ...context.profile.hardAvoids.filter((entry) => entry.polarity !== "prefer"),
+    ...(context.profile.preferenceSignals === undefined ? context.profile.hardAvoids.filter((entry) => entry.polarity !== "prefer") : []),
     ...(context.intent.temporaryItemRules ?? []).filter((entry) => entry.polarity === "avoid"),
   ].filter((entry) => entry.strength === "hard");
   for (const rule of rules) {
@@ -105,6 +114,15 @@ function hardAvoidReason(item: WardrobeItem, context: RecommendationContext) {
   return null;
 }
 
+function hardCombinationAvoidReason(items: WardrobeItem[], context: RecommendationContext) {
+  if (context.profile.preferenceSignals === undefined) return null;
+  const signal = activeLongTermPreferenceSignals(context.profile).find((entry) => entry.strength === "hard"
+    && entry.polarity === "less"
+    && entry.attribute === "combination"
+    && outfitMatchesCombinationSignal(items, entry));
+  return signal?.label ?? null;
+}
+
 export function validateRequiredAnchors(context: RecommendationContext) {
   const slots = new Map<OutfitSlot, string>();
   for (const id of context.requiredItemIds) {
@@ -124,6 +142,11 @@ export function validateRequiredAnchors(context: RecommendationContext) {
   }
   if (slots.has("onePiece") && (slots.has("top") || slots.has("bottom"))) {
     throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", "A required one-piece cannot be combined with a required top or bottom.", [...context.requiredItemIds]);
+  }
+  const requiredItems = [...context.requiredItemIds].map((id) => context.wardrobeIndex.get(id)).filter((item): item is WardrobeItem => Boolean(item));
+  const combinationAvoid = hardCombinationAvoidReason(requiredItems, context);
+  if (combinationAvoid) {
+    throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `Required items conflict with “${combinationAvoid}”.`, [...context.requiredItemIds]);
   }
   return slots;
 }
@@ -152,6 +175,9 @@ export function validateOutfit(ids: OutfitItemIds, context: RecommendationContex
   for (const id of context.requiredItemIds) {
     if (!seen.has(id)) violations.push({ code: "REQUIRED_ITEM_MISSING", message: "A required item is missing.", itemIds: [id] });
   }
+  const outfitItems = [...seen].map((id) => context.wardrobeIndex.get(id)).filter((item): item is WardrobeItem => Boolean(item));
+  const combinationAvoid = hardCombinationAvoidReason(outfitItems, context);
+  if (combinationAvoid) violations.push({ code: "HARD_AVOID", message: `This outfit conflicts with “${combinationAvoid}”.`, itemIds: outfitItems.map((item) => item.id) });
   if (context.intent.walkingIntensity >= 5 && ids.shoes) {
     const shoes = context.wardrobeIndex.get(ids.shoes);
     if (shoes && shoes.comfort < 3) violations.push({ code: "WALKING_UNSAFE", message: `${shoes.subtype} is unsuitable for extended walking.`, itemIds: [shoes.id] });
@@ -184,6 +210,9 @@ export function validatePartial(ids: Partial<OutfitItemIds>, context: Recommenda
     const item = context.wardrobeIndex.get(id);
     if (item && !remainingSlots.has(slotForItem(item))) violations.push({ code: "REQUIRED_ITEM_MISSING", message: "A partial candidate can no longer include a required item.", itemIds: [id] });
   }
+  const partialItems = values.map((id) => context.wardrobeIndex.get(id)).filter((item): item is WardrobeItem => Boolean(item));
+  const combinationAvoid = hardCombinationAvoidReason(partialItems, context);
+  if (combinationAvoid) violations.push({ code: "HARD_AVOID", message: `A partial candidate already conflicts with “${combinationAvoid}”.`, itemIds: partialItems.map((item) => item.id) });
   if (context.currentOutfit) {
     for (const slot of context.preserveSlots) {
       if (!(slot in ids)) continue;

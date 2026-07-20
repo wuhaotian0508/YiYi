@@ -39,6 +39,9 @@ export async function rankOutfits(input: {
   preferenceSummary: string;
   weather: WeatherContext | null;
   signal?: AbortSignal;
+  recommendationOperationId?: string;
+  profileVersion?: number;
+  outfitVersion?: string | null;
 }): Promise<RankedOutfits> {
   const candidates = input.candidates.slice(0, 8);
   if (candidates.length < 1) throw new Error("No legal outfit candidates");
@@ -70,6 +73,11 @@ export async function rankOutfits(input: {
         preferences: { summary: input.preferenceSummary },
         weather: input.weather,
         candidates: boards,
+        correlation: input.recommendationOperationId ? {
+          recommendationOperationId: input.recommendationOperationId,
+          profileVersion: input.profileVersion ?? 0,
+          outfitVersion: input.outfitVersion ?? null,
+        } : undefined,
       }),
     });
     if (!response.ok) return fallback(candidates, `RANK_HTTP_${response.status}`);

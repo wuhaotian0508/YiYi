@@ -1,21 +1,39 @@
 import OpenAI from "openai";
 import sharp from "sharp";
 import { zodTextFormat } from "openai/helpers/zod";
-import { WardrobeAnalysisSchema, type WardrobeAnalysis } from "@/domain/schemas";
+import { WardrobeAnalysisProviderSchema, WardrobeAnalysisSchema, type WardrobeAnalysis } from "@/domain/schemas";
 import { apiError, noStoreJson } from "@/lib/api/responses";
 import { providerRoutesAllowed, takeRateLimit } from "@/lib/api/rate-limit";
 import { logApiDiagnostic, responseUsage, safeErrorMetadata } from "@/lib/api/diagnostics";
+import { openAIClientOptions, providerTimeoutMs } from "@/lib/api/provider-policy";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const MAX_INPUT_BYTES = 4_100_000;
+const MAX_INPUT_PIXELS = 60_000_000;
+const MAX_INPUT_DIMENSION = 12_000;
 
 function supportedMagic(bytes: Uint8Array) {
   const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   const png = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
   const webp = String.fromCharCode(...bytes.slice(8, 12)) === "WEBP";
-  const heif = String.fromCharCode(...bytes.slice(4, 12)).includes("ftyp");
+  const box = String.fromCharCode(...bytes.slice(4, 8));
+  const brand = String.fromCharCode(...bytes.slice(8, 12));
+  const heif = box === "ftyp" && new Set(["heic", "heix", "hevc", "hevx", "mif1", "msf1"]).has(brand);
   return jpeg || png || webp || heif;
+}
+
+async function validImageGeometry(input: Buffer) {
+  try {
+    const metadata = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS, failOn: "warning" }).metadata();
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+    const pages = metadata.pages ?? 1;
+    return width > 0 && height > 0 && width <= MAX_INPUT_DIMENSION && height <= MAX_INPUT_DIMENSION
+      && width * height <= MAX_INPUT_PIXELS && pages === 1;
+  } catch {
+    return false;
+  }
 }
 
 function mockAnalysis(): WardrobeAnalysis {
@@ -32,6 +50,7 @@ export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
   if (!providerRoutesAllowed()) return apiError(requestId, 503, "PUBLIC_PROTECTION_REQUIRED", "Live processing is not available until production rate protection is configured.", true);
   const rate = await takeRateLimit(request, "wardrobe-process", 20);
+  if (!rate.available) return apiError(requestId, 503, "RATE_LIMIT_UNAVAILABLE", "Image processing protection is temporarily unavailable.", true);
   if (!rate.allowed) return apiError(requestId, 429, "RATE_LIMITED", `Try again in ${rate.retryAfterSeconds} seconds.`, true);
   try {
     const form = await request.formData();
@@ -40,6 +59,7 @@ export async function POST(request: Request) {
     if (file.size > MAX_INPUT_BYTES) return apiError(requestId, 413, "IMAGE_TOO_LARGE", "This photo is too large. Take a new photo or choose a smaller one.");
     const input = Buffer.from(await file.arrayBuffer());
     if (!supportedMagic(input.subarray(0, 16))) return apiError(requestId, 415, "UNSUPPORTED_IMAGE", "Use a JPEG, PNG, WebP, or HEIC image.");
+    if (!(await validImageGeometry(input))) return apiError(requestId, 415, "INVALID_IMAGE", "Choose a valid single-frame photo.");
 
     if (process.env.AI_MODE !== "live") {
       const normalized = await sharp(input).rotate().resize(1024, 1024, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 88 }).toBuffer();
@@ -77,7 +97,7 @@ export async function POST(request: Request) {
     }
     logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "success", httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt });
     const imageUrl = `data:image/webp;base64,${normalized.toString("base64")}`;
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = new OpenAI(openAIClientOptions(process.env.OPENAI_API_KEY));
     const model = process.env.OPENAI_ITEM_MODEL ?? "gpt-5.6-terra";
     const openaiStartedAt = Date.now();
     const result = await openai.responses.parse({
@@ -88,8 +108,8 @@ export async function POST(request: Request) {
           { type: "input_text", text: "Analyze this single transparent clothing cutout using only visible evidence. Use the supplied schema, controlled colors, specific accessory categories, unknown when uncertain, and no brand guesses. Return calibrated confidence for category, colors, materials, pattern, fit, style, formality, warmth, and comfort. Mark model-derived feature provenance as terra; user corrections will override it later." },
           { type: "input_image", image_url: imageUrl, detail: "high" },
         ] }],
-        text: { format: zodTextFormat(WardrobeAnalysisSchema, "wardrobe_analysis") },
-      }).catch((error: unknown) => {
+        text: { format: zodTextFormat(WardrobeAnalysisProviderSchema, "wardrobe_analysis") },
+      }, { signal: AbortSignal.timeout(providerTimeoutMs.itemAnalysis) }).catch((error: unknown) => {
       const metadata = safeErrorMetadata(error);
       logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", ...metadata, durationMs: Date.now() - openaiStartedAt, errorCode: "ITEM_ANALYSIS_FAILED" });
       return null;
@@ -103,7 +123,9 @@ export async function POST(request: Request) {
     const analysis = parsedAnalysis.data;
     logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "success", httpStatus: 200, durationMs: Date.now() - openaiStartedAt, usage: responseUsage(result) });
     return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis });
-  } catch {
+  } catch (error) {
+    const metadata = safeErrorMetadata(error);
+    logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "application", outcome: "error", ...metadata, durationMs: 0, errorCode: "PROCESSING_FAILED" });
     return apiError(requestId, 500, "PROCESSING_FAILED", "We couldn’t process this item. Please try again.", true);
   }
 }

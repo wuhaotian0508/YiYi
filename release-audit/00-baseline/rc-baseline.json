@@ -1,0 +1,74 @@
+{
+  "capturedAt": "2026-07-20",
+  "branch": "codex/yiyi-core",
+  "baselineCommit": "085b09d92dd33e48377018a503a7706b7421d1f9",
+  "workingTree": {
+    "clean": false,
+    "reason": "Prompt 1 Voice, Prompt 2 Calibration, and Prompt 3 Motion changes are the preserved RC candidate baseline; this audit must not reset them."
+  },
+  "schemaVersions": {
+    "dexie": 6,
+    "wardrobeItem": 1,
+    "preferenceProfile": 2
+  },
+  "runtime": {
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "typescript": "6.0.3",
+    "dexie": "4.4.4",
+    "zod": "4.4.3",
+    "openai": "6.48.0",
+    "openaiAgents": "0.13.4",
+    "motion": "12.42.2",
+    "gsap": "3.15.0",
+    "swiper": "14.0.5"
+  },
+  "routes": {
+    "pages": [
+      "/",
+      "/onboarding",
+      "/today",
+      "/wardrobe",
+      "/wardrobe/[itemId]",
+      "/wardrobe/add",
+      "/preferences",
+      "/settings"
+    ],
+    "developmentOnly": [
+      "/calibration-lab",
+      "/motion-review"
+    ],
+    "api": [
+      "/api/health",
+      "/api/outfits/rank",
+      "/api/realtime/token",
+      "/api/wardrobe/process",
+      "/api/weather"
+    ]
+  },
+  "verifiedBaseline": {
+    "lint": "pass",
+    "typecheck": "pass",
+    "unit": "29 files, 175 tests passed",
+    "build": "pass",
+    "motionWebKit": "7 passed",
+    "e2e": "23 passed, 5 documented skips",
+    "productionReviewRoutes": "motion-review returned 404; root and today returned 200",
+    "productionReviewInstrumentationMatches": 0,
+    "motionFrameSampler": {
+      "medianMs": 17,
+      "p95Ms": "23-24",
+      "p99Ms": "24-25",
+      "maxConsecutiveSevereFrames": 0
+    },
+    "routeChunkGzipKb": {
+      "gsapOnboarding": 43.0,
+      "swiperShell": 34.9
+    }
+  },
+  "secrets": {
+    "envLocalRead": false,
+    "envLocalModified": false,
+    "productionSecretsModified": false
+  }
+}

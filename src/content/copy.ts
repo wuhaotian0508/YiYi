@@ -1,19 +1,4 @@
 export const copy = {
-  splash: {
-    title: "What should I wear today?",
-    subtitleStart: "Tell",
-    subtitleEnd: "in one sentence.",
-  },
-  tutorial: {
-    title: "Tell YiYi about your day — not your clothes.",
-    subtitle: "YiYi will choose from your wardrobe for you.",
-    wrong: "Brown hoodie with blue jeans.",
-    wrongLabel: "You’re still choosing",
-    right: "Class, dinner with friends, lots of walking, and I want to feel relaxed.",
-    rightLabel: "Let YiYi decide",
-    showMe: "Show me how",
-    tryIt: "Try it yourself",
-  },
   permission: {
     title: "YiYi is built around live voice.",
     body: "Microphone access is required to continue.",

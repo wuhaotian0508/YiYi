@@ -18,6 +18,14 @@ export type ApiDiagnostic = {
   imageMime?: "image/webp" | "image/png" | "mixed";
   providerStage?: string;
   schemaName?: string;
+  voiceAttemptId?: string;
+  sessionGeneration?: number;
+  voiceStage?: string;
+  retryCount?: number;
+  tokenRequest?: "new" | "reused";
+  recommendationOperationId?: string;
+  profileVersion?: number;
+  outfitVersion?: string | null;
 };
 
 function statusCategory(status: number | undefined) {
@@ -78,6 +86,14 @@ export function logApiDiagnostic(diagnostic: ApiDiagnostic) {
     imageMime: diagnostic.imageMime,
     providerStage: diagnostic.providerStage,
     schemaName: diagnostic.schemaName,
+    voiceAttemptId: diagnostic.voiceAttemptId,
+    sessionGeneration: diagnostic.sessionGeneration,
+    voiceStage: diagnostic.voiceStage,
+    retryCount: diagnostic.retryCount,
+    tokenRequest: diagnostic.tokenRequest,
+    recommendationOperationId: diagnostic.recommendationOperationId,
+    profileVersion: diagnostic.profileVersion,
+    outfitVersion: diagnostic.outfitVersion,
   };
   const serialized = JSON.stringify(payload);
   if (diagnostic.outcome === "error") console.error(serialized);

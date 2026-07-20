@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "policy": "Provider SDK retries are disabled; retry is an explicit user action after a labeled failure.",
+  "routes": {
+    "/api/realtime/token": { "openaiCallsPerAttempt": 1, "sdkRetries": 0, "timeoutMs": 10000, "rateLimitCalls": 1 },
+    "/api/outfits/rank": { "openaiCallsPerAttempt": 1, "sdkRetries": 0, "timeoutMs": 20000, "rateLimitCalls": 1 },
+    "/api/wardrobe/process": { "photoroomCallsPerAttempt": 1, "openaiCallsPerAttempt": 1, "sdkRetries": 0, "photoroomTimeoutMs": 30000, "openaiTimeoutMs": 20000, "rateLimitCalls": 1 },
+    "/api/weather": { "providerCallsPerAttempt": 1, "timeoutMs": 8000 }
+  },
+  "protection": { "upstashCallsPerProtectedRequest": 1, "timeoutMs": 2500, "failureMode": "closed" },
+  "alerts": [
+    "more than one token request for one voiceAttemptId",
+    "more than one Sol request for one recommendationOperationId",
+    "provider request after client abort or stale generation",
+    "rate limiter unavailable followed by a paid provider request"
+  ]
+}

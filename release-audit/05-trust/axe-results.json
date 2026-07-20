@@ -1,0 +1,12 @@
+{
+  "date": "2026-07-20",
+  "axeCore": "4.11.0",
+  "standards": ["wcag2a", "wcag2aa", "wcag21aa"],
+  "routes": ["/", "/today", "/wardrobe", "/preferences", "/settings"],
+  "browsers": {
+    "chromium": { "seriousOrCriticalViolations": 0, "tests": 4, "status": "pass" },
+    "webkitIPhone15": { "seriousOrCriticalViolations": 0, "tests": 4, "status": "pass" }
+  },
+  "manualDeterministicChecks": ["bottom-sheet focus trap and restore", "Escape close", "non-drag Today/Wardrobe navigation", "security headers do not block app"],
+  "limitation": "Automated scanning does not replace VoiceOver, Dynamic Type, switch control or real-device contrast review."
+}

@@ -1,0 +1,18 @@
+{
+  "version": "release-eval-v1",
+  "scenarioCount": 16,
+  "candidateCount": 443,
+  "hardConstraintViolationRate": 0,
+  "legalCandidateRecall": 1,
+  "requiredAnchorSuccessRate": 1,
+  "targetedSlotPreservationRate": 1,
+  "nonTargetStabilityRate": 1,
+  "duplicateSessionRepeatRate": 0,
+  "fallbackLegalityRate": 1,
+  "deterministicReproducibilityRate": 1,
+  "explanationFaithfulnessRate": 1,
+  "personalizationCausalityRate": 1,
+  "calibrationCausalityRate": 1,
+  "maxExpandedPartials": 2268,
+  "maxReturnedCandidates": 48
+}

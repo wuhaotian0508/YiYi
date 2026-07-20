@@ -128,3 +128,18 @@ export async function resetInvalidOutfitSession(input: { sessionId: string; expe
     return updated;
   });
 }
+
+export async function updateItemAvailabilityMutation(input: {
+  itemId: string;
+  availability: WardrobeItem["availability"];
+  reason: string | null;
+}) {
+  return db.transaction("rw", db.wardrobeItems, async () => {
+    const updated = await db.wardrobeItems.update(input.itemId, {
+      availability: input.availability,
+      unavailableReason: input.reason ?? undefined,
+      updatedAt: Date.now(),
+    });
+    return updated ? db.wardrobeItems.toArray() : null;
+  });
+}

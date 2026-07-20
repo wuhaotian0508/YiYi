@@ -1,0 +1,1 @@
+{"status":"no-product-failures","evalVersion":"release-eval-v1","note":"The first harness run used an over-strong candidate-set identity assertion; it was replaced by an isolated shoe-only counterfactual rather than changing production search."}

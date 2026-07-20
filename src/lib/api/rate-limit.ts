@@ -48,16 +48,22 @@ export async function takeRateLimit(request: Request, bucket: string, limit: num
   const mode = rateLimitMode();
   const windowKey = Math.floor(Date.now() / windowMs);
   const key = `yiyi:${bucket}:${fingerprint(request)}:${windowKey}`;
-  if (mode === "upstash") return distributedConsume(key, limit, windowMs);
+  if (mode === "upstash") {
+    try {
+      return { ...(await distributedConsume(key, limit, windowMs)), available: true as const };
+    } catch {
+      return { allowed: false, retryAfterSeconds: 0, mode, available: false as const };
+    }
+  }
 
   const now = Date.now();
   if (counters.size > 1_000) for (const [entryKey, counter] of counters) if (counter.resetsAt <= now) counters.delete(entryKey);
   const current = counters.get(key);
   if (!current || current.resetsAt <= now) {
     counters.set(key, { count: 1, resetsAt: now + windowMs });
-    return { allowed: true, retryAfterSeconds: 0, mode };
+    return { allowed: true, retryAfterSeconds: 0, mode, available: true as const };
   }
-  if (current.count >= limit) return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((current.resetsAt - now) / 1_000)), mode };
+  if (current.count >= limit) return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((current.resetsAt - now) / 1_000)), mode, available: true as const };
   current.count += 1;
-  return { allowed: true, retryAfterSeconds: 0, mode };
+  return { allowed: true, retryAfterSeconds: 0, mode, available: true as const };
 }

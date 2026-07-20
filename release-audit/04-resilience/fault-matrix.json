@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-20",
+  "cases": [
+    { "dependency": "OpenAI Realtime token", "fault": "401/provider rejection", "expected": "one 502 TOKEN_PROVIDER_FAILED; no SDK retry; sanitized response", "evidence": "provider-route-faults.test.ts", "status": "pass" },
+    { "dependency": "OpenAI Sol ranking", "fault": "timeout", "expected": "one 502 RANK_PROVIDER_FAILED; no SDK retry", "evidence": "provider-route-faults.test.ts", "status": "pass" },
+    { "dependency": "OpenAI Terra analysis", "fault": "malformed structured output", "expected": "one 502 INVALID_ITEM_ANALYSIS_OUTPUT after one provider call", "evidence": "provider-route-faults.test.ts", "status": "pass" },
+    { "dependency": "OpenAI Terra schema", "fault": "Zod transform cannot compile", "expected": "provider wire schema compiles before deployment", "evidence": "provider-policy.test.ts", "status": "pass" },
+    { "dependency": "Photoroom", "fault": "invalid image bytes", "expected": "one 502 INVALID_BACKGROUND_REMOVAL_OUTPUT; Terra not called", "evidence": "provider-route-faults.test.ts", "status": "pass" },
+    { "dependency": "Upstash", "fault": "timeout/unavailable/invalid payload", "expected": "fail closed with 503 RATE_LIMIT_UNAVAILABLE; provider not called", "evidence": "rate-limit.test.ts", "status": "pass" },
+    { "dependency": "weather", "fault": "malformed provider payload", "expected": "502 WEATHER_FAILED; no corrupt weather state", "evidence": "audit-regressions.spec.ts", "status": "pass" },
+    { "dependency": "Realtime adapter", "fault": "token success then connect failure or failure-only event", "expected": "terminal error, runtime cleanup, explicit retry only", "evidence": "voice-session-coordinator.test.ts", "status": "pass" },
+    { "dependency": "Dexie", "fault": "transaction interruption/concurrent base version", "expected": "rollback or one winner plus STALE_OPERATION", "evidence": "recommendation-mutations.test.ts", "status": "pass" },
+    { "dependency": "browser network", "fault": "abort/out-of-order recommendation", "expected": "stale operation cannot publish or commit", "evidence": "recommendation-mutations.test.ts", "status": "pass" }
+  ]
+}

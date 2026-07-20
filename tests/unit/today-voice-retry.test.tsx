@@ -1,5 +1,6 @@
 import "fake-indexeddb/auto";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -37,11 +38,14 @@ describe("Today live voice recovery", () => {
       throw new Error(`Unexpected request: ${url}`);
     }));
 
-    render(<TodayPage />);
+    render(<StrictMode><TodayPage /></StrictMode>);
     const dock = await screen.findByRole("button", { name: "Start live voice session" });
     await waitFor(() => expect(dock).toBeEnabled());
     fireEvent.click(dock);
+    fireEvent.click(dock);
     await screen.findByText("YiYi couldn’t finish that.");
+    expect(tokenRequests).toBe(1);
+    expect(screen.queryByText("Listening…")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Start live voice session" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Start live voice session" }));
     await waitFor(() => expect(tokenRequests).toBe(2));

@@ -1,0 +1,21 @@
+{
+  "version": "release-eval-v1",
+  "scenarios": [
+    { "id": "tiny-exhaustive", "focus": ["legal-candidate-recall", "reproducibility"] },
+    { "id": "large-wardrobe", "focus": ["search-complexity", "candidate-cap"] },
+    { "id": "rain-walking", "focus": ["weather", "walking", "fallback-legality"] },
+    { "id": "required-accessory", "focus": ["required-anchor"] },
+    { "id": "one-piece", "focus": ["core-structure"] },
+    { "id": "missing-low-confidence", "focus": ["metadata-confidence", "legality"] },
+    { "id": "context-matrix", "focus": ["class", "dinner", "formal", "travel", "photo-ready", "ambiguous"] },
+    { "id": "hard-avoid", "focus": ["profile-hard-rule", "fallback-legality"] },
+    { "id": "conflicting-required", "focus": ["accurate-error"] },
+    { "id": "unavailable-laundry", "focus": ["availability"] },
+    { "id": "targeted-shoes", "focus": ["targeted-slot-preservation"] },
+    { "id": "global-warmer-preserve", "focus": ["global-revision", "explicit-preserve"] },
+    { "id": "random-session", "focus": ["duplicate-rate", "perceptual-diversity"] },
+    { "id": "less-sporty-footwear", "focus": ["preference-causality", "non-target-stability"] },
+    { "id": "calibration-anchor", "focus": ["calibration-causality", "confidence"] },
+    { "id": "visual-and-fallback", "focus": ["visual-fusion", "explanation-faithfulness", "fallback-legality"] }
+  ]
+}

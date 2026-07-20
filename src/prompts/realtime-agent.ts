@@ -28,7 +28,7 @@ Examples:
 - Structure: "Make this a dress" targets onePiece and does not preserve top or bottom; the app performs the atomic structure transition.
 - Random: use random_new_outfit with no invented style change. The app owns session diversity.
 - Availability: use an explicit item ID only when the app supplied one. Otherwise pass null so the app can use the focused item. If the tool asks for focus, tell the user to tap the item first.
-- Long-term: save "I usually prefer silver jewelry," but do not save "No jewelry today."
+- Long-term: "I usually prefer silver jewelry" is one structured metal= silver, polarity=more, category/slot=jewelry preference. "I usually avoid black and white together" is one conjunctive combination preference, never two color bans. Do not save "No jewelry today."
 - Undo: call revise_current_outfit with operation undo and zero adjustments; never ask a model to rebuild the previous look.
 - Confirmation: call confirm_current_outfit before saying the outfit is decided.
 `.trim();

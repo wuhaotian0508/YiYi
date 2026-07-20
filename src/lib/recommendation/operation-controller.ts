@@ -45,3 +45,14 @@ export class RecommendationOperationController {
     return true;
   }
 }
+
+export async function runCommitPhase<T>(
+  controller: RecommendationOperationController,
+  token: OperationToken,
+  mutation: () => Promise<T>,
+) {
+  controller.enterCommit(token);
+  const result = await mutation();
+  controller.enterPublish(token);
+  return result;
+}
