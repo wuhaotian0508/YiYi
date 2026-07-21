@@ -67,7 +67,7 @@ describe("BrowserPreferenceVoiceAdapter", () => {
     FakeRecognition.latest?.onresult?.({ results: [{ 0: { transcript: "I usually prefer silver jewelry" } }] });
     FakeRecognition.latest?.onend?.();
 
-    expect(states.at(-1)).toBe("thinking");
+    expect(states.at(-1)).toBe("understanding");
     expect(failures).toEqual([]);
   });
 

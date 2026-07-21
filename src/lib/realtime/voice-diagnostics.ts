@@ -22,6 +22,8 @@ export type VoiceDiagnostic = {
   zodIssuePaths?: string[];
   outfitCommittedAt?: number;
   audioStartedAt?: number;
+  turnCommittedAt?: number;
+  outfitVersionId?: string;
 };
 
 export function logVoiceDiagnostic(diagnostic: VoiceDiagnostic) {

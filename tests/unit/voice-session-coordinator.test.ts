@@ -18,6 +18,8 @@ class FakeVoiceAdapter implements VoiceSessionAdapter {
   readonly failures = new Set<(failure: VoiceConnectionFailure) => void>();
   connectCalls = 0;
   disconnectCalls = 0;
+  commitCalls = 0;
+  interruptCalls = 0;
   muted = false;
 
   constructor(
@@ -28,16 +30,32 @@ class FakeVoiceAdapter implements VoiceSessionAdapter {
   connect() { this.connectCalls += 1; this.emit("connecting"); return this.connection; }
   async disconnect() { this.disconnectCalls += 1; this.emit("idle"); await this.cleanup; }
   mute(muted: boolean) { this.muted = muted; }
+  commitTurn() { this.commitCalls += 1; this.emit("committing"); }
+  interruptAndListen() { this.interruptCalls += 1; this.emit("listening"); }
   onState(listener: (state: VoiceState) => void) { this.states.add(listener); return () => this.states.delete(listener); }
   onTranscript(listener: (transcript: TranscriptState) => void) { this.transcripts.add(listener); return () => this.transcripts.delete(listener); }
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failures.add(listener); return () => this.failures.delete(listener); }
   emit(state: VoiceState) { this.states.forEach((listener) => listener(state)); }
-  fail(failure: VoiceConnectionFailure) { this.failures.forEach((listener) => listener(failure)); this.emit("error"); }
+  fail(failure: VoiceConnectionFailure) { this.failures.forEach((listener) => listener(failure)); this.emit("recoverable_error"); }
   failWithoutState(failure: VoiceConnectionFailure) { this.failures.forEach((listener) => listener(failure)); }
   emitTranscript(transcript: TranscriptState) { this.transcripts.forEach((listener) => listener(transcript)); }
 }
 
 describe("VoiceSessionCoordinator", () => {
+  it("routes central commit and interrupt actions only in their valid states", async () => {
+    const adapter = new FakeVoiceAdapter();
+    const coordinator = new VoiceSessionCoordinator();
+    await coordinator.start("today", () => adapter);
+    adapter.emit("listening");
+    expect(coordinator.commitTurn("today")).toBe(true);
+    expect(coordinator.commitTurn("today")).toBe(false);
+    expect(adapter.commitCalls).toBe(1);
+    adapter.emit("speaking");
+    expect(coordinator.interruptAndListen("today")).toBe(true);
+    expect(coordinator.interruptAndListen("today")).toBe(false);
+    expect(adapter.interruptCalls).toBe(1);
+  });
+
   it("shares one connect promise across simultaneous callers for the same owner", async () => {
     const pending = deferred<void>();
     const adapter = new FakeVoiceAdapter(pending.promise);
@@ -78,7 +96,7 @@ describe("VoiceSessionCoordinator", () => {
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(factory).toHaveBeenCalledTimes(1);
-    expect(coordinator.getSnapshot().status).toBe("error");
+    expect(coordinator.getSnapshot().status).toBe("recoverable_error");
     vi.useRealTimers();
   });
 
@@ -107,7 +125,7 @@ describe("VoiceSessionCoordinator", () => {
     await coordinator.stop("today", "user");
     await coordinator.start("today", () => second);
     second.emit("listening");
-    first.emit("error");
+    first.emit("recoverable_error");
 
     expect(coordinator.getSnapshot().status).toBe("listening");
     expect(first.states.size).toBe(0);
@@ -174,7 +192,7 @@ describe("VoiceSessionCoordinator", () => {
 
     failed.fail(new VoiceConnectionFailure({ stage: "audio", code: "AUDIO_OUTPUT_FAILED" }));
     await vi.waitFor(() => expect(failed.disconnectCalls).toBe(1));
-    expect(coordinator.getSnapshot()).toMatchObject({ status: "error", stage: "audio", errorCode: "AUDIO_OUTPUT_FAILED" });
+    expect(coordinator.getSnapshot()).toMatchObject({ status: "recoverable_error", stage: "audio", errorCode: "AUDIO_OUTPUT_FAILED" });
 
     await coordinator.start("today", () => recovered);
     expect(recovered.connectCalls).toBe(1);
@@ -189,7 +207,7 @@ describe("VoiceSessionCoordinator", () => {
 
     failed.failWithoutState(new VoiceConnectionFailure({ stage: "audio", code: "AUDIO_OUTPUT_FAILED" }));
     await vi.waitFor(() => expect(failed.disconnectCalls).toBe(1));
-    expect(coordinator.getSnapshot()).toMatchObject({ status: "error", stage: "audio", errorCode: "AUDIO_OUTPUT_FAILED" });
+    expect(coordinator.getSnapshot()).toMatchObject({ status: "recoverable_error", stage: "audio", errorCode: "AUDIO_OUTPUT_FAILED" });
 
     await coordinator.start("today", () => recovered);
     expect(recovered.connectCalls).toBe(1);

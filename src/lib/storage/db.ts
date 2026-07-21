@@ -8,10 +8,19 @@ const obsoleteDemoItemId = "11111111-1111-4111-8111-111111111112";
 export type AppSetting = { key: string; value: string | number | boolean };
 export type ProcessingJob = { id: string; status: "waiting" | "processing" | "failed" | "complete"; createdAt: number };
 export type ExperienceMode = "demo" | "personal";
+export type OnboardingState = {
+  status: "incomplete" | "complete";
+  version: 1;
+  completedAt: number | null;
+  experienceMode: ExperienceMode | null;
+};
 
 const experienceModeKey = "experienceMode";
 const demoWardrobeSeededKey = "demoWardrobeSeeded";
 const demoItemIdsKey = "demoItemIds";
+const onboardingStateKey = "onboardingState";
+const legacyOnboardingStorageKey = "yiyi:onboarding-complete";
+const incompleteOnboardingState: OnboardingState = { status: "incomplete", version: 1, completedAt: null, experienceMode: null };
 
 const cannedDemoRuleKeys = new Set([
   "category\u0000heels\u0000hard\u0000avoid",
@@ -349,13 +358,107 @@ export class YiYiDatabase extends Dexie {
         migratePreferenceProfileV6(profile as MutableLegacyProfile);
       });
     });
+    this.version(7).stores({
+      wardrobeItems: "&id, category, availability, lastWornAt, createdAt",
+      itemImages: "&itemId",
+      preferenceProfiles: "&id",
+      dailySessions: "&id, dateKey, status",
+      outfitVersions: "&id, sessionId, parentVersionId, createdAt",
+      appSettings: "&key",
+      processingJobs: "&id, status, createdAt",
+    });
   }
 }
 
 export const db = new YiYiDatabase();
 
-export function shouldSeedDemoWardrobe(input: { mode: ExperienceMode | null; alreadySeeded: boolean; itemCount: number; environmentEnabled: boolean }) {
-  return input.mode !== "personal" && !input.alreadySeeded && input.itemCount === 0 && input.environmentEnabled;
+export function shouldSeedDemoWardrobe(input: { mode: ExperienceMode | null; alreadySeeded: boolean; itemCount: number; environmentEnabled?: boolean; explicit?: boolean }) {
+  return input.explicit === true && input.mode !== "personal" && !input.alreadySeeded && input.itemCount === 0;
+}
+
+function parseOnboardingState(value: unknown): OnboardingState | null {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<OnboardingState>;
+    if (candidate.version !== 1 || (candidate.status !== "complete" && candidate.status !== "incomplete")) return null;
+    if (candidate.experienceMode !== null && candidate.experienceMode !== "demo" && candidate.experienceMode !== "personal") return null;
+    if (candidate.completedAt !== null && typeof candidate.completedAt !== "number") return null;
+    return candidate as OnboardingState;
+  } catch {
+    return null;
+  }
+}
+
+async function writeOnboardingState(state: OnboardingState) {
+  await db.appSettings.put({ key: onboardingStateKey, value: JSON.stringify(state) });
+}
+
+export async function getOnboardingState() {
+  return parseOnboardingState((await db.appSettings.get(onboardingStateKey))?.value) ?? incompleteOnboardingState;
+}
+
+/**
+ * localStorage was the legacy completion source. Migration is intentionally
+ * runtime-only: IndexedDB upgrades cannot safely read browser web storage.
+ * Existing wardrobe records are inspected but never removed or rewritten.
+ */
+export async function migrateLegacyOnboardingState(storage?: Pick<Storage, "getItem" | "removeItem">): Promise<OnboardingState> {
+  const existing = parseOnboardingState((await db.appSettings.get(onboardingStateKey))?.value);
+  const legacyStorage = storage ?? (typeof window === "undefined" ? undefined : window.localStorage);
+  if (existing) {
+    legacyStorage?.removeItem(legacyOnboardingStorageKey);
+    return existing;
+  }
+  if (legacyStorage?.getItem(legacyOnboardingStorageKey) !== "true") return incompleteOnboardingState;
+
+  const storedMode = await getExperienceMode();
+  const items = await db.wardrobeItems.toArray();
+  const hasPersonalItems = items.some((item) => item.dataProvenance !== "demo");
+  const hasDemoItems = items.some((item) => item.dataProvenance === "demo");
+  const mode: ExperienceMode = hasPersonalItems ? "personal" : storedMode ?? (hasDemoItems ? "demo" : "personal");
+  const state: OnboardingState = { status: "complete", version: 1, completedAt: Date.now(), experienceMode: mode };
+  await db.transaction("rw", db.appSettings, async () => {
+    await db.appSettings.put({ key: experienceModeKey, value: mode });
+    await writeOnboardingState(state);
+  });
+  legacyStorage.removeItem(legacyOnboardingStorageKey);
+  return state;
+}
+
+export async function completeOnboarding(input: { mode: ExperienceMode; profile: PreferenceProfile; demoItems: WardrobeItem[] }) {
+  return db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
+    const currentItems = await db.wardrobeItems.toArray();
+    const personalItems = currentItems.filter((item) => item.dataProvenance !== "demo");
+    const effectiveMode: ExperienceMode = input.mode === "demo" && personalItems.length > 0 ? "personal" : input.mode;
+
+    if (effectiveMode === "personal") {
+      const demoIds = currentItems.filter((item) => item.dataProvenance === "demo").map((item) => item.id);
+      if (demoIds.length > 0) {
+        await db.wardrobeItems.bulkDelete(demoIds);
+        await db.itemImages.bulkDelete(demoIds);
+        await db.dailySessions.clear();
+        await db.outfitVersions.clear();
+      }
+      await db.appSettings.put({ key: demoWardrobeSeededKey, value: true });
+    } else {
+      const alreadySeeded = (await db.appSettings.get(demoWardrobeSeededKey))?.value === true;
+      if (shouldSeedDemoWardrobe({ mode: "demo", alreadySeeded, itemCount: currentItems.length, explicit: true })) {
+        const demoItems = input.demoItems.map((item) => ({ ...item, dataProvenance: "demo" as const, featureProvenance: { ...item.featureProvenance, source: "demo" as const } }));
+        await db.wardrobeItems.bulkPut(demoItems);
+        await db.appSettings.put({ key: demoItemIdsKey, value: JSON.stringify(demoItems.map((item) => item.id)) });
+      }
+      await db.appSettings.put({ key: demoWardrobeSeededKey, value: true });
+    }
+
+    const completedAt = Date.now();
+    const state: OnboardingState = { status: "complete", version: 1, completedAt, experienceMode: effectiveMode };
+    await db.appSettings.put({ key: experienceModeKey, value: effectiveMode });
+    await db.preferenceProfiles.put(input.profile);
+    await writeOnboardingState(state);
+    return state;
+  });
 }
 
 export async function setExperienceMode(mode: ExperienceMode, resetDemoSeed = false) {
@@ -401,13 +504,13 @@ export async function seedWardrobe(items: WardrobeItem[], options: { explicit?: 
     const modeValue = (await db.appSettings.get(experienceModeKey))?.value;
     const mode = modeValue === "demo" || modeValue === "personal" ? modeValue : null;
     const alreadySeeded = (await db.appSettings.get(demoWardrobeSeededKey))?.value === true;
-    const environmentEnabled = options.explicit === true || process.env.NEXT_PUBLIC_SEED_DEMO_WARDROBE !== "false";
+    if (options.explicit !== true) return;
     if (itemCount > 0 && !mode) {
       await db.appSettings.put({ key: experienceModeKey, value: "personal" });
       await db.appSettings.put({ key: demoWardrobeSeededKey, value: true });
       return;
     }
-    if (!shouldSeedDemoWardrobe({ mode, alreadySeeded, itemCount, environmentEnabled })) return;
+    if (!shouldSeedDemoWardrobe({ mode, alreadySeeded, itemCount, explicit: true })) return;
     const demoItems = items.map((item) => ({ ...item, dataProvenance: "demo" as const, featureProvenance: { ...item.featureProvenance, source: "demo" as const } }));
     await db.wardrobeItems.bulkPut(demoItems);
     await db.appSettings.put({ key: experienceModeKey, value: "demo" });

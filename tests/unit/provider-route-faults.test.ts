@@ -16,6 +16,7 @@ import { POST as processWardrobeItem } from "@/app/api/wardrobe/process/route";
 import { demoIntent } from "@/mocks/wardrobe";
 
 const candidateId = "11111111-1111-4111-8111-111111111111";
+const webBytes = (buffer: Buffer) => Uint8Array.from(buffer);
 const validBoard = await sharp({ create: { width: 512, height: 640, channels: 4, background: { r: 220, g: 210, b: 200, alpha: 1 } } }).webp().toBuffer();
 const validWebpDataUrl = `data:image/webp;base64,${validBoard.toString("base64")}`;
 const rankBody = {
@@ -35,7 +36,7 @@ afterEach(() => {
 });
 
 describe("paid provider fault boundaries", () => {
-  it("configures the Realtime token with high semantic VAD eagerness", async () => {
+  it("configures the Realtime token for conservative automatic interruption", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "live");
     vi.stubEnv("OPENAI_API_KEY", "test-key");
@@ -48,7 +49,7 @@ describe("paid provider fault boundaries", () => {
       session: expect.objectContaining({
         audio: expect.objectContaining({
           input: expect.objectContaining({
-            turn_detection: { type: "semantic_vad", eagerness: "high", create_response: true, interrupt_response: true },
+            turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: true, interrupt_response: false },
           }),
         }),
       }),
@@ -93,7 +94,7 @@ describe("paid provider fault boundaries", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 }));
     const input = await sharp({ create: { width: 2, height: 2, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } }).png().toBuffer();
     const form = new FormData();
-    form.set("image", new File([input], "item.png", { type: "image/png" }));
+    form.set("image", new File([webBytes(input)], "item.png", { type: "image/png" }));
     const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=test", "x-forwarded-for": crypto.randomUUID() } });
     vi.spyOn(request, "formData").mockResolvedValue(form);
     const response = await processWardrobeItem(request);
@@ -140,10 +141,10 @@ describe("paid provider fault boundaries", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const cutout = await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } } }).webp().toBuffer();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(cutout, { status: 200, headers: { "Content-Type": "text/html" } }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(webBytes(cutout), { status: 200, headers: { "Content-Type": "text/html" } }));
     const input = await sharp({ create: { width: 2, height: 2, channels: 3, background: { r: 255, g: 255, b: 255 } } }).jpeg().toBuffer();
     const form = new FormData();
-    form.set("image", new File([input], "item.jpg", { type: "image/jpeg" }));
+    form.set("image", new File([webBytes(input)], "item.jpg", { type: "image/jpeg" }));
     const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=test", "x-forwarded-for": crypto.randomUUID() } });
     vi.spyOn(request, "formData").mockResolvedValue(form);
     const response = await processWardrobeItem(request);
@@ -159,10 +160,10 @@ describe("paid provider fault boundaries", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const cutout = await sharp({ create: { width: 3000, height: 3000, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } } }).webp().toBuffer();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(cutout, { status: 200, headers: { "Content-Type": "image/webp" } }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(webBytes(cutout), { status: 200, headers: { "Content-Type": "image/webp" } }));
     const input = await sharp({ create: { width: 2, height: 2, channels: 3, background: { r: 255, g: 255, b: 255 } } }).jpeg().toBuffer();
     const form = new FormData();
-    form.set("image", new File([input], "item.jpg", { type: "image/jpeg" }));
+    form.set("image", new File([webBytes(input)], "item.jpg", { type: "image/jpeg" }));
     const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=test", "x-forwarded-for": crypto.randomUUID() } });
     vi.spyOn(request, "formData").mockResolvedValue(form);
     const response = await processWardrobeItem(request);
@@ -178,10 +179,10 @@ describe("paid provider fault boundaries", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const cutout = await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } } }).webp().toBuffer();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(cutout, { status: 200, headers: { "Content-Type": "image/webp", "Content-Length": "5000001" } }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(webBytes(cutout), { status: 200, headers: { "Content-Type": "image/webp", "Content-Length": "5000001" } }));
     const input = await sharp({ create: { width: 2, height: 2, channels: 3, background: { r: 255, g: 255, b: 255 } } }).jpeg().toBuffer();
     const form = new FormData();
-    form.set("image", new File([input], "item.jpg", { type: "image/jpeg" }));
+    form.set("image", new File([webBytes(input)], "item.jpg", { type: "image/jpeg" }));
     const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=test", "x-forwarded-for": crypto.randomUUID() } });
     vi.spyOn(request, "formData").mockResolvedValue(form);
     const response = await processWardrobeItem(request);
@@ -204,14 +205,14 @@ describe("paid provider fault boundaries", () => {
     });
     const input = await sharp({ create: { width: 2, height: 2, channels: 3, background: { r: 255, g: 255, b: 255 } } }).jpeg().toBuffer();
     const form = new FormData();
-    form.set("image", new File([input], "forged.png", { type: "image/png" }));
+    form.set("image", new File([webBytes(input)], "forged.png", { type: "image/png" }));
     const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=test", "x-forwarded-for": crypto.randomUUID() } });
     vi.spyOn(request, "formData").mockResolvedValue(form);
     await processWardrobeItem(request);
     expect(forwardedType).toBe("image/jpeg");
   });
 
-  it("rejects malformed Terra output after one Photoroom and one OpenAI call", async () => {
+  it("preserves a valid Photoroom cutout for manual Review when Terra output is malformed", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubEnv("AI_MODE", "live");
     vi.stubEnv("PHOTOROOM_API_KEY", "test-key");
@@ -219,18 +220,23 @@ describe("paid provider fault boundaries", () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     const cutout = await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 120, g: 80, b: 40, alpha: 1 } } }).webp().toBuffer();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(cutout, { status: 200, headers: { "Content-Type": "image/webp" } }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(webBytes(cutout), { status: 200, headers: { "Content-Type": "image/webp" } }));
     provider.parse.mockResolvedValue({ output_parsed: { invented: true }, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
     const input = await sharp({ create: { width: 2, height: 2, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } }).png().toBuffer();
     const form = new FormData();
-    form.set("image", new File([input], "item.png", { type: "image/png" }));
+    form.set("image", new File([webBytes(input)], "item.png", { type: "image/png" }));
     const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=test", "x-forwarded-for": crypto.randomUUID() } });
     vi.spyOn(request, "formData").mockResolvedValue(form);
     const response = await processWardrobeItem(request);
     const body = await response.json();
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    expect(response.status, `${JSON.stringify(body)} ${String(errorLog.mock.calls.at(-1)?.[0])}`).toBe(502);
+    expect(response.status, `${JSON.stringify(body)} ${String(errorLog.mock.calls.at(-1)?.[0])}`).toBe(200);
     expect(provider.parse, `${JSON.stringify(body)} ${String(errorLog.mock.calls.at(-1)?.[0])}`).toHaveBeenCalledTimes(1);
-    expect(body).toMatchObject({ error: { code: "INVALID_ITEM_ANALYSIS_OUTPUT", retryable: true } });
+    expect(body).toMatchObject({
+      source: { cutout: "photoroom", analysis: "manual-review" },
+      analysisStatus: "needs-review",
+      diagnostics: { analysisErrorCode: "INVALID_ITEM_ANALYSIS_OUTPUT" },
+    });
+    expect(body.cutoutDataUrl).toMatch(/^data:image\/webp;base64,/);
   });
 });

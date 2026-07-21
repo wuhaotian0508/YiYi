@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
+import { seedExplicitDemo } from "./helpers/seed-explicit-demo";
 
 const iPhoneSizes = [[375, 667], [390, 844], [393, 852], [430, 932]] as const;
 
@@ -9,9 +10,9 @@ test("capture YiYi result review set", async ({ page, browserName }) => {
   const output = resolve(process.cwd(), "tmp/visual");
   await mkdir(output, { recursive: true });
   await page.addInitScript(() => {
-    localStorage.setItem("yiyi:onboarding-complete", "true");
     localStorage.setItem("yiyi:test-auto-voice", "true");
   });
+  await seedExplicitDemo(page);
   await page.goto("/today");
   await page.getByRole("button", { name: "Start live voice session" }).click();
   await expect(page.getByText("I’d wear this one today.")).toBeVisible({ timeout: 8_000 });
@@ -30,9 +31,9 @@ test("capture reduced-motion result review set", async ({ page, browserName }) =
   await mkdir(output, { recursive: true });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
-    localStorage.setItem("yiyi:onboarding-complete", "true");
     localStorage.setItem("yiyi:test-auto-voice", "true");
   });
+  await seedExplicitDemo(page);
   await page.goto("/today");
   await page.getByRole("button", { name: "Start live voice session" }).click();
   await expect(page.getByText("I’d wear this one today.")).toBeVisible({ timeout: 8_000 });
@@ -117,7 +118,7 @@ test("capture compact secondary-page review set", async ({ page, browserName }) 
   const output = resolve(process.cwd(), "tmp/visual");
   await mkdir(output, { recursive: true });
   await page.setViewportSize({ width: 375, height: 667 });
-  await page.addInitScript(() => localStorage.setItem("yiyi:onboarding-complete", "true"));
+  await seedExplicitDemo(page);
 
   await page.goto("/wardrobe");
   await expect(page.locator(".wardrobe-tile").first()).toBeVisible();

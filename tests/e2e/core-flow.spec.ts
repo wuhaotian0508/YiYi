@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { resolve } from "node:path";
+import { seedExplicitDemo } from "./helpers/seed-explicit-demo";
 
 async function inspectRecommendationState(page: Page) {
   return page.evaluate(async () => {
@@ -23,9 +24,9 @@ async function inspectRecommendationState(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("yiyi:onboarding-complete", "true");
     localStorage.setItem("yiyi:test-auto-voice", "true");
   });
+  await seedExplicitDemo(page);
 });
 
 test("continuous voice recommendation, targeted revision, and confirmation", async ({ page }) => {
@@ -79,6 +80,7 @@ test("continuous voice recommendation, targeted revision, and confirmation", asy
   await expect(page.getByText("Back to your previous outfit.")).toBeVisible();
   await page.getByRole("button", { name: "Wear this today" }).click();
   await expect(page.getByText("Outfit decided.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start live voice session" })).toBeVisible();
   await page.reload();
   await expect(page.getByText("Outfit decided.")).toBeVisible();
 });

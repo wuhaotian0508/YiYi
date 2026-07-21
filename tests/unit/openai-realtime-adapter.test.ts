@@ -7,6 +7,9 @@ const sdk = vi.hoisted(() => {
     connect: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
     mute: ReturnType<typeof vi.fn>;
+    interrupt: ReturnType<typeof vi.fn>;
+    sendEvent: ReturnType<typeof vi.fn>;
+    requestResponse: ReturnType<typeof vi.fn>;
     updateSessionConfig: ReturnType<typeof vi.fn>;
     updateAgent: ReturnType<typeof vi.fn>;
     agent: unknown;
@@ -21,6 +24,9 @@ const sdk = vi.hoisted(() => {
     connect = vi.fn(async () => undefined);
     close = vi.fn();
     mute = vi.fn();
+    interrupt = vi.fn();
+    sendEvent = vi.fn();
+    requestResponse = vi.fn();
     options: unknown;
     updateSessionConfig = vi.fn();
     agent: unknown;
@@ -35,6 +41,8 @@ const sdk = vi.hoisted(() => {
         this.transportListeners.set(event, listeners);
       },
       updateSessionConfig: this.updateSessionConfig,
+      sendEvent: this.sendEvent,
+      requestResponse: this.requestResponse,
     };
     constructor(agent: unknown, options: unknown) { this.agent = agent; this.options = options; sessions.push(this); }
     on(event: string, listener: (...args: unknown[]) => void) {
@@ -64,9 +72,7 @@ import { PreferenceDeltaSchema, type PreferenceDelta } from "@/domain/schemas";
 
 const handlers: VoiceToolHandlers = {
   requestRecommendation: async () => ({ success: false, summary: "unused" }),
-  revise: async () => ({ success: false, summary: "unused" }),
-  confirm: async () => ({ success: false, summary: "unused" }),
-  setAvailability: async () => ({ success: false, summary: "unused" }),
+  handleTurn: async () => ({ success: false, summary: "unused" }),
   savePreference: async () => ({ success: false, summary: "unused" }),
 };
 
@@ -135,6 +141,14 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     });
   });
 
+  it("accepts a minimal follow-up action without confidence, ambiguity, UUIDs, or an internal delta", async () => {
+    const handleTurn = vi.fn().mockResolvedValue({ success: true, summary: "Changed.", changedSlots: ["shoes"], outfitVersionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+    const tools = createRealtimeVoiceTools({ ...handlers, handleTurn }, "today");
+    const actionTool = tools.find((candidate) => (candidate as { name?: string }).name === "handle_outfit_turn") as unknown as { execute(value: unknown): Promise<unknown> };
+    await actionTool.execute({ action: "revise", userRequest: "Make the shoes more relaxed", targetSlot: "shoes", targetDescription: "shoes", availability: null });
+    expect(handleTurn).toHaveBeenCalledWith({ action: "revise", userRequest: "Make the shoes more relaxed", targetSlot: "shoes", targetDescription: "shoes", availability: null });
+  });
+
   it("uses one token and one transport for connect, multiple turns, and cleanup", async () => {
     const attemptId = crypto.randomUUID();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
@@ -185,7 +199,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(states.filter((state) => state === "error")).toHaveLength(0);
   });
 
-  it("configures a fast first turn with one required tool, then restores the full auto tool set", async () => {
+  it("uses conservative automatic interruption and switches agents only after successful initial mutation", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
     await adapter.connect();
@@ -194,26 +208,94 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(session.options).toMatchObject({
       config: {
         toolChoice: "required",
-        audio: { input: { turnDetection: { type: "semantic_vad", eagerness: "high" } } },
+        audio: { input: { turnDetection: { type: "semantic_vad", eagerness: "auto", interruptResponse: false } } },
       },
     });
     expect((session.agent as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
       "request_outfit_recommendation",
     ]);
     session.emit("agent_tool_start", {}, {}, { name: "request_outfit_recommendation" }, { toolCall: { callId: "call-1" } });
+    expect(session.updateAgent).not.toHaveBeenCalled();
+    expect(session.updateSessionConfig).toHaveBeenLastCalledWith({ toolChoice: "auto" });
+    session.emit("agent_tool_end", {}, {}, { name: "request_outfit_recommendation" }, JSON.stringify({ success: true, summary: "Ready." }), { toolCall: { callId: "call-1" } });
     await vi.waitFor(() => expect(session.updateAgent).toHaveBeenCalledTimes(1));
     expect(((session.updateAgent.mock.calls[0]?.[0]) as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
       "request_outfit_recommendation",
-      "revise_current_outfit",
-      "confirm_current_outfit",
-      "set_item_availability",
+      "handle_outfit_turn",
       "save_explicit_preference",
     ]);
-    expect(session.updateSessionConfig).toHaveBeenCalledTimes(2);
-    expect(session.updateSessionConfig.mock.calls).toEqual([
-      [{ toolChoice: "auto" }],
-      [{ toolChoice: "auto" }],
+    expect(session.updateSessionConfig).not.toHaveBeenCalledWith({ toolChoice: "required" });
+    session.emit("audio_stopped");
+    expect(session.updateSessionConfig).toHaveBeenLastCalledWith({ toolChoice: "required" });
+  });
+
+  it("does not switch runtime agents after a failed initial mutation", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+    const tool = { name: "request_outfit_recommendation" };
+    session.emit("agent_tool_start", {}, {}, tool, { toolCall: { callId: "call-1" } });
+    session.emit("agent_tool_end", {}, {}, tool, JSON.stringify({ success: false, summary: "No legal outfit.", failureStage: "recommendation", errorCode: "NO_LEGAL_OUTFIT" }), { toolCall: { callId: "call-1" } });
+    expect(session.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it("manual commit and speaking interruption use the existing transport without reconnecting", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today" });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    adapter.commitTurn?.();
+    expect(session.mute).toHaveBeenLastCalledWith(true);
+    expect(session.sendEvent).toHaveBeenCalledWith({ type: "input_audio_buffer.commit" });
+    expect(session.requestResponse).toHaveBeenCalledOnce();
+    session.emit("audio_start");
+    adapter.interruptAndListen?.();
+    expect(session.interrupt).toHaveBeenCalledOnce();
+    expect(session.mute).toHaveBeenLastCalledWith(false);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("deduplicates repeated follow-up tool calls within one committed turn", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const handleTurn = vi.fn().mockResolvedValue({ success: true, summary: "Changed.", changedSlots: ["shoes"], outfitVersionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+    const adapter = new OpenAIRealtimeVoiceAdapter({ ...handlers, handleTurn }, { purpose: "today" });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+    const actionTool = (session.agent as { tools: Array<{ name: string; execute(input: unknown): Promise<unknown> }> }).tools.find((candidate) => candidate.name === "handle_outfit_turn")!;
+    const first = actionTool.execute({ action: "revise", userRequest: "Change the shoes", targetSlot: "shoes", targetDescription: "shoes", availability: null });
+    const repeated = actionTool.execute({ action: "revise", userRequest: "Change the shoes again", targetSlot: "shoes", targetDescription: "shoes", availability: null });
+    await expect(Promise.all([first, repeated])).resolves.toEqual([
+      expect.objectContaining({ outfitVersionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+      expect.objectContaining({ outfitVersionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
     ]);
+    expect(handleTurn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an active session connected after confirm and accepts a later revision", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const handleTurn = vi.fn()
+      .mockResolvedValueOnce({ success: true, summary: "Outfit decided.", changedSlots: [], outfitVersionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" })
+      .mockResolvedValueOnce({ success: true, summary: "I changed the shoes.", changedSlots: ["shoes"], removedItemIds: ["old-shoes"], addedItemIds: ["new-shoes"], outfitVersionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" });
+    const adapter = new OpenAIRealtimeVoiceAdapter({ ...handlers, handleTurn }, { purpose: "today" });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+    const actionTool = (session.agent as { tools: Array<{ name: string; execute(input: unknown): Promise<unknown> }> }).tools.find((candidate) => candidate.name === "handle_outfit_turn")!;
+
+    session.emit("agent_tool_start", {}, {}, actionTool, { toolCall: { callId: "confirm-1" } });
+    const confirmed = await actionTool.execute({ action: "confirm", userRequest: "Wear this today", targetSlot: null, targetDescription: null, availability: null });
+    session.emit("agent_tool_end", {}, {}, actionTool, JSON.stringify(confirmed), { toolCall: { callId: "confirm-1" } });
+    session.emit("audio_stopped");
+
+    expect(session.close).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledOnce();
+
+    const revised = await actionTool.execute({ action: "revise", userRequest: "Change the shoes", targetSlot: "shoes", targetDescription: "shoes", availability: null });
+    expect(revised).toMatchObject({ success: true, changedSlots: ["shoes"], outfitVersionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" });
+    expect(handleTurn).toHaveBeenCalledTimes(2);
+    expect(session.close).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
   it("clears the no-tool watchdog after a successful initial recommendation and keeps the session reusable", async () => {
@@ -242,6 +324,10 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(session.updateAgent).toHaveBeenCalledTimes(1);
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    const runtimeTool = (session.agent as { tools: Array<{ name: string }> }).tools.find((candidate) => candidate.name === "handle_outfit_turn")!;
+    session.emit("agent_tool_start", {}, {}, runtimeTool, { toolCall: { callId: "call-2" } });
+    session.emit("agent_tool_end", {}, {}, runtimeTool, JSON.stringify({ success: true, summary: "No change.", changedSlots: [], outfitVersionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }), { toolCall: { callId: "call-2" } });
+    session.emit("audio_stopped");
     await vi.advanceTimersByTimeAsync(15_000);
     expect(failures).toEqual([]);
     vi.useRealTimers();
@@ -283,7 +369,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
 
     await vi.advanceTimersByTimeAsync(15_000);
     expect(failures).toEqual(["INITIAL_RECOMMENDATION_TIMEOUT"]);
-    expect(states.at(-1)).toBe("error");
+    expect(states.at(-1)).toBe("recoverable_error");
     vi.useRealTimers();
   });
 
@@ -300,7 +386,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     session.emit("transport_event", { type: "input_audio_buffer.speech_started" });
     session.emit("audio_stopped");
 
-    expect(states.at(-1)).toBe("thinking");
+    expect(states.at(-1)).toBe("tool_running");
   });
 
   it("preserves tool argument failure classification and safe issue paths in diagnostics", async () => {

@@ -18,6 +18,7 @@ import { updateProfileFromOutfitFeedback } from "@/domain/preferences/feedback";
 import { recommendationPreferenceSummary } from "@/domain/preferences/summary";
 import { assertDisplayedOutfitLegal, runRecommendationDecision, validateRestoredOutfit } from "@/domain/recommendation/engine";
 import { createRecommendationContext, RecommendationError } from "@/domain/recommendation/context";
+import { outfitMutationProof, voiceActionToIntentDelta } from "@/domain/recommendation/voice-action-router";
 import { IntentDeltaSchema, type DailyIntent, type IntentDelta, type Outfit, type OutfitSlot, type WardrobeItem, type WeatherContext } from "@/domain/schemas";
 import { configureSounds, playSound, unlockSounds } from "@/lib/audio/sound-system";
 import { calmSpring } from "@/lib/motion/tokens";
@@ -27,9 +28,9 @@ import { persistPreferenceDelta } from "@/lib/preferences/profile-storage";
 import { rankOutfits } from "@/lib/recommendation/client-ranking";
 import { RecommendationOperationController, runCommitPhase, type OperationToken } from "@/lib/recommendation/operation-controller";
 import { commitOutfitMutation, confirmOutfitMutation, resetInvalidOutfitSession, undoOutfitMutation, updateItemAvailabilityMutation } from "@/lib/recommendation/session-mutations";
-import { db, getExperienceMode, getSoundEnabled, seedPreferences, seedWardrobe } from "@/lib/storage/db";
-import { fetchConfiguredWeather, resolveWeatherForSession } from "@/lib/weather/client";
-import { demoIntent, demoPreferenceProfile, demoWardrobe } from "@/mocks/wardrobe";
+import { db, getSoundEnabled } from "@/lib/storage/db";
+import { configuredWeatherMode, fetchConfiguredWeather, getStoredWeatherState, resolveWeatherForSession, usableCachedWeather, type WeatherSource } from "@/lib/weather/client";
+import { demoIntent } from "@/mocks/wardrobe";
 
 type Phase = "idle" | "connecting" | "listening" | "understanding" | "generating" | "presenting" | "revising" | "paused" | "confirmed" | "error";
 type IntentTag = { id: string; kind: "activity" | "aesthetic" | "excluded"; index: number; label: string };
@@ -49,27 +50,34 @@ function intentTags(intent: DailyIntent): IntentTag[] {
 
 function voiceVisualState(phase: Phase, voiceState: VoiceLifecycleStatus): VoiceVisualState {
   if (voiceState === "rate_limited") return "error";
-  if (phase === "understanding" || phase === "generating" || phase === "revising") return "thinking";
+  if (voiceState === "recoverable_error") return "recoverable_error";
+  if (phase === "revising") return "revising";
+  if (phase === "generating") return "tool_running";
+  if (phase === "understanding") return "understanding";
   return voiceState;
 }
 
 function voiceStatus(phase: Phase, voice: VoiceSessionSnapshot) {
   if (voice.status === "rate_limited") return "Too many starts · Try again after the cooldown";
-  if (voice.status === "error" || phase === "error") {
+  if (voice.status === "recoverable_error" || phase === "error") {
     if (voice.stage === "permission") return "Microphone access is needed · Tap to retry";
     if (voice.stage === "token") return "Voice access is unavailable · Tap to retry";
     if (voice.stage === "webrtc" || voice.stage === "ready") return "Voice connection failed · Tap to retry";
     return "Voice didn’t start · Tap to retry";
   }
   if (voice.status === "connecting") return "Connecting…";
+  if (voice.status === "committing") return "Finishing your turn…";
+  if (voice.status === "tool_running") return "Choosing…";
+  if (voice.status === "revising") return "Revising…";
   if (phase === "understanding") return "Understanding…";
   if (phase === "generating") return "Creating one clear answer…";
   if (phase === "revising") return "Revising…";
   if (phase === "paused") return "Session paused · Tap to reconnect";
   if (voice.status === "speaking") return "YiYi is speaking…";
   if (voice.status === "interrupted") return "Interrupted · Listening again…";
+  if (phase === "confirmed" && voice.status === "listening") return "Listening for changes…";
   if (phase === "presenting") return "YiYi is listening…";
-  if (phase === "confirmed") return "Outfit decided";
+  if (phase === "confirmed") return "Outfit decided · Tap to continue";
   return voice.status === "listening" ? "Listening…" : "Tap to talk";
 }
 
@@ -86,10 +94,10 @@ export function TodayPage() {
   const [reason, setReason] = useState<string>(copy.outfit.reason);
   const [history, setHistory] = useState<Outfit[]>([]);
   const [focusedSlot, setFocusedSlot] = useState<OutfitSlot | null>(null);
-  const [muted, setMuted] = useState(false);
   const [editingTag, setEditingTag] = useState<IntentTag | null>(null);
   const [tagDraft, setTagDraft] = useState("");
   const [weather, setWeather] = useState<WeatherContext | null>(null);
+  const [weatherSource, setWeatherSource] = useState<WeatherSource | null>(null);
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const operationControllerRef = useRef(new RecommendationOperationController());
   const sessionIdRef = useRef<string | null>(null);
@@ -115,18 +123,24 @@ export function TodayPage() {
     let cancelled = false;
     const operationController = operationControllerRef.current;
     void (async () => {
-      await seedWardrobe(demoWardrobe);
-      const experienceMode = await getExperienceMode();
-      await seedPreferences(experienceMode === "personal" ? createNeutralPreferenceProfile() : demoPreferenceProfile);
       configureSounds(await getSoundEnabled());
-      const freshWeather = (await fetchConfiguredWeather())?.weather ?? null;
-      const items = await db.wardrobeItems.toArray();
-      const sessions = await db.dailySessions.where("dateKey").equals(localDateKey()).toArray();
+      const [items, sessions, cachedState] = await Promise.all([
+        db.wardrobeItems.toArray(),
+        db.dailySessions.where("dateKey").equals(localDateKey()).toArray(),
+        getStoredWeatherState(),
+      ]);
       const session = sessions.sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      const freshResult = await fetchConfiguredWeather();
+      const freshWeather = freshResult?.weather ?? null;
       if (cancelled) return;
-      const resolvedWeather = resolveWeatherForSession(freshWeather, session?.weather);
+      const cachedWeather = usableCachedWeather(cachedState);
+      const resolvedWeather = resolveWeatherForSession(freshWeather, session?.weather, cachedWeather);
+      const resolvedSource = freshResult?.source
+        ?? (cachedWeather === resolvedWeather ? cachedState.source : configuredWeatherMode() === "fixed-demo" ? "fixed-demo" : resolvedWeather ? "open-meteo" : null);
       setWeather(resolvedWeather);
+      setWeatherSource(resolvedSource);
       weatherRef.current = resolvedWeather;
+      if (freshWeather && session && session.weather?.sourceTimestamp !== freshWeather.sourceTimestamp) await db.dailySessions.update(session.id, { weather: freshWeather });
       setWardrobe(items);
       wardrobeRef.current = items;
       setHydrated(true);
@@ -188,11 +202,13 @@ export function TodayPage() {
 
   useEffect(() => {
     if (voiceSnapshot.owner !== "today") return;
-    if (["connecting", "listening", "thinking", "speaking", "interrupted"].includes(voiceSnapshot.status)) resetInactivityTimer();
+    if (["connecting", "listening", "committing", "understanding", "tool_running", "revising", "speaking", "interrupted"].includes(voiceSnapshot.status)) resetInactivityTimer();
     if (voiceSnapshot.status === "connecting" && !currentRef.current) setPhase("connecting");
-    if (voiceSnapshot.status === "listening") setPhase((value) => currentRef.current ? (value === "revising" ? value : "presenting") : "listening");
-    if (voiceSnapshot.status === "thinking") setPhase((value) => currentRef.current ? (value === "revising" ? value : "presenting") : "understanding");
-    if (voiceSnapshot.status === "error" || voiceSnapshot.status === "rate_limited") {
+    if (voiceSnapshot.status === "listening") setPhase((value) => value === "confirmed" ? value : currentRef.current ? (value === "revising" ? value : "presenting") : "listening");
+    if (voiceSnapshot.status === "committing" || voiceSnapshot.status === "understanding") setPhase((value) => currentRef.current ? value : "understanding");
+    if (voiceSnapshot.status === "tool_running") setPhase((value) => currentRef.current ? value : "generating");
+    if (voiceSnapshot.status === "revising") setPhase("revising");
+    if (voiceSnapshot.status === "recoverable_error" || voiceSnapshot.status === "rate_limited") {
       operationControllerRef.current.cancel();
       setPhase(currentRef.current ? "paused" : "error");
     }
@@ -324,7 +340,12 @@ export function TodayPage() {
       setPhase("presenting");
       operationControllerRef.current.finish(token);
       if (input.operation === "targeted_revision") playSound("replacement");
-      return { success: true as const, summary: input.operation === "targeted_revision" ? "Better. I kept every unmentioned piece." : input.operation === "random_new_outfit" ? "Here is a different legal answer for the same day." : input.operation === "global_revision" ? "This answer follows the new direction." : "I found one clear outfit for today." };
+      return {
+        success: true as const,
+        summary: input.operation === "targeted_revision" ? "Better. I kept every unmentioned piece." : input.operation === "random_new_outfit" ? "Here is a different legal answer for the same day." : input.operation === "global_revision" ? "This answer follows the new direction." : "I found one clear outfit for today.",
+        ...outfitMutationProof(before, ranked.outfit),
+        outfitVersionId: committed.versionId,
+      };
     } catch (error) {
       if (!operationControllerRef.current.isCurrent(token)) return { success: false as const, summary: "A newer outfit operation replaced this one." };
       if (input.clearInvalidCurrentOnFailure && token.baseVersionId) {
@@ -412,10 +433,9 @@ export function TodayPage() {
       }
       const session = await runCommitPhase(operationControllerRef.current, token, () => confirmOutfitMutation({ sessionId, baseVersionId, expectedGeneration: operationGenerationRef.current, outfit, updatedProfile }));
       operationGenerationRef.current = session.operationGeneration;
-      await disconnectVoice();
       setPhase("confirmed");
       operationControllerRef.current.finish(token);
-      return { success: true as const, summary: "Outfit decided." };
+      return { success: true as const, summary: "Outfit decided. I’ll stay available for changes.", changedSlots: [], removedItemIds: [], addedItemIds: [], outfitVersionId: baseVersionId };
     } catch { operationControllerRef.current.finish(token); setPhase("presenting"); return { success: false as const, summary: "The outfit changed before it could be confirmed." }; }
   }
 
@@ -424,43 +444,56 @@ export function TodayPage() {
     const staleVoice = () => ({ success: false, summary: "That voice session has already ended." });
     return {
       requestRecommendation: (nextIntent) => currentVoice() ? executeDecision({ operation: "initial", nextIntent, utterance: nextIntent.freeformSummary, voiceGeneration }) : Promise.resolve(staleVoice()),
-      revise: async (input) => {
+      handleTurn: async (input) => {
         if (!currentVoice()) return staleVoice();
-        if (input.operation === "undo") { const success = await undo(voiceGeneration); return { success, summary: success ? "I restored the previous outfit." : currentVoice() ? "There is no previous outfit to restore." : "That voice session has already ended." }; }
-        if (input.operation === "confirm") return confirmCurrent(voiceGeneration);
-        if (input.operation === "random_new_outfit") return executeDecision({ operation: "random_new_outfit", delta: input, utterance: input.rawUtterance, voiceGeneration });
-        const delta = input.operation === "targeted_revision" && !input.targetSlots.length && focusedSlotRef.current ? IntentDeltaSchema.parse({ ...input, targetSlots: [focusedSlotRef.current] }) : input;
-        if (delta.operation === "targeted_revision" && !delta.targetSlots.length) return { success: false, summary: "Tap the item you want to change." };
-        if (delta.operation !== "targeted_revision" && delta.operation !== "global_revision") return { success: false, summary: "That revision operation is not available here." };
-        return executeDecision({ operation: delta.operation, delta, utterance: delta.rawUtterance, voiceGeneration });
-      },
-      confirm: () => currentVoice() ? confirmCurrent(voiceGeneration) : Promise.resolve(staleVoice()),
-      setAvailability: async (input) => {
-        if (!currentVoice()) return staleVoice();
-        let token: OperationToken;
-        try { token = operationControllerRef.current.begin(versionIdRef.current); }
-        catch { return { success: false, summary: "I’m still finishing the previous outfit change." }; }
-        try {
-          const focusedItemId = focusedSlotRef.current ? currentRef.current?.itemIds[focusedSlotRef.current] ?? null : null;
-          const itemId = resolveAvailabilityItemId(input.itemId, focusedItemId);
-          if (!itemId) { operationControllerRef.current.finish(token); return { success: false, summary: "Tap the item you mean, then tell me its availability again." }; }
-          if (!currentVoice()) { operationControllerRef.current.finish(token); return staleVoice(); }
-          operationControllerRef.current.enterCommit(token);
-          const items = await updateItemAvailabilityMutation({ itemId, availability: input.availability, reason: input.reason });
-          if (!items) { operationControllerRef.current.finish(token); return { success: false, summary: "I could not find that wardrobe item." }; }
-          if (currentRef.current && Object.values(currentRef.current.itemIds).includes(itemId) && input.availability !== "available") {
-            const delta = IntentDeltaSchema.parse({ operation: "global_revision", targetSlots: [], preserveSlots: [], requiredItemIds: [], excludedItemIds: [itemId], excludedCategories: [], adjustments: zeroAdjustments, desiredStyleTags: [], undesiredStyleTags: [], rawUtterance: input.reason || "Replace the unavailable item.", confidence: 1, ambiguity: [] });
-            return executeDecision({ operation: "global_revision", delta, utterance: delta.rawUtterance, operationToken: token, clearInvalidCurrentOnFailure: true });
-          }
-          operationControllerRef.current.enterPublish(token);
-          setWardrobe(items);
-          wardrobeRef.current = items;
-          operationControllerRef.current.finish(token);
-          return { success: true, summary: "I updated that item." };
-        } catch {
-          operationControllerRef.current.finish(token);
-          return { success: false, summary: "I could not safely update that item." };
+        if (input.action === "no_change") return { success: true, summary: "I’m listening when you’re ready.", changedSlots: [], removedItemIds: [], addedItemIds: [], outfitVersionId: versionIdRef.current ?? undefined };
+        if (input.action === "confirm") return confirmCurrent(voiceGeneration);
+        if (input.action === "undo") {
+          const before = currentRef.current;
+          const success = await undo(voiceGeneration);
+          const after = currentRef.current;
+          return success && after
+            ? { success: true, summary: "I restored the previous outfit.", ...outfitMutationProof(before, after), outfitVersionId: versionIdRef.current ?? undefined }
+            : { success: false, summary: currentVoice() ? "There is no previous outfit to restore." : "That voice session has already ended.", errorCode: "UNDO_UNAVAILABLE", failureStage: "persistence" };
         }
+        if (input.action === "random") return executeDecision({ operation: "random_new_outfit", delta: randomDelta(), utterance: input.userRequest, voiceGeneration });
+        if (input.action === "save_preference") return { success: false, summary: "Please add lasting preferences in Fine-tune so you can review them.", errorCode: "PREFERENCE_REVIEW_REQUIRED", failureStage: "tool" };
+        if (input.action === "set_availability") {
+          if (!input.availability) return { success: false, summary: "Tell me whether that item is available, in laundry, or unavailable.", errorCode: "AVAILABILITY_REQUIRED", failureStage: "tool" };
+          let token: OperationToken;
+          try { token = operationControllerRef.current.begin(versionIdRef.current); }
+          catch { return { success: false, summary: "I’m still finishing the previous outfit change." }; }
+          try {
+            const targetSlot = input.targetSlot ?? focusedSlotRef.current;
+            const focusedItemId = targetSlot ? currentRef.current?.itemIds[targetSlot] ?? null : null;
+            const itemId = resolveAvailabilityItemId(null, focusedItemId);
+            if (!itemId) { operationControllerRef.current.finish(token); return { success: false, summary: "Tap the item you mean, then tell me its availability again." }; }
+            if (!currentVoice()) { operationControllerRef.current.finish(token); return staleVoice(); }
+            operationControllerRef.current.enterCommit(token);
+            const items = await updateItemAvailabilityMutation({ itemId, availability: input.availability, reason: input.userRequest });
+            if (!items) { operationControllerRef.current.finish(token); return { success: false, summary: "I could not find that wardrobe item." }; }
+            if (currentRef.current && Object.values(currentRef.current.itemIds).includes(itemId) && input.availability !== "available") {
+              const delta = IntentDeltaSchema.parse({ operation: "global_revision", targetSlots: [], preserveSlots: [], emptySlots: [], requiredItemIds: [], excludedItemIds: [itemId], excludedCategories: [], adjustments: zeroAdjustments, desiredStyleTags: [], undesiredStyleTags: [], rawUtterance: input.userRequest, confidence: 1, ambiguity: [] });
+              return executeDecision({ operation: "global_revision", delta, utterance: delta.rawUtterance, operationToken: token, clearInvalidCurrentOnFailure: true });
+            }
+            operationControllerRef.current.enterPublish(token);
+            setWardrobe(items);
+            wardrobeRef.current = items;
+            operationControllerRef.current.finish(token);
+            return { success: true, summary: "I updated that item.", changedSlots: [], removedItemIds: [], addedItemIds: [], outfitVersionId: versionIdRef.current ?? undefined };
+          } catch {
+            operationControllerRef.current.finish(token);
+            return { success: false, summary: "I could not safely update that item.", errorCode: "AVAILABILITY_UPDATE_FAILED", failureStage: "persistence" };
+          }
+        }
+        const outfit = currentRef.current;
+        if (!outfit) return { success: false, summary: "There is no current outfit to revise.", errorCode: "OUTFIT_REQUIRED", failureStage: "lifecycle" };
+        const delta = voiceActionToIntentDelta({ action: input, currentOutfit: outfit, wardrobe: wardrobeRef.current, focusedSlot: focusedSlotRef.current });
+        if (input.action === "remove" && !delta.targetSlots.length) return { success: false, summary: "Tap or name the item you want removed.", errorCode: "REVISION_TARGET_REQUIRED", failureStage: "tool" };
+        if (delta.emptySlots?.length && delta.emptySlots.every((slot) => !outfit.itemIds[slot])) {
+          return { success: true, summary: "That item is already out of this outfit.", changedSlots: [], removedItemIds: [], addedItemIds: [], outfitVersionId: versionIdRef.current ?? undefined };
+        }
+        return executeDecision({ operation: delta.operation === "targeted_revision" ? "targeted_revision" : "global_revision", delta, utterance: input.userRequest, voiceGeneration });
       },
       savePreference: async (input) => {
         if (!currentVoice()) return staleVoice();
@@ -481,8 +514,8 @@ export function TodayPage() {
 
   async function startSession() {
     const connection = voiceSessionCoordinator.getSnapshot();
-    if (!hydrated || operationControllerRef.current.isBusy() || ["connecting", "listening", "thinking", "speaking", "interrupted"].includes(connection.status)) return;
-    const resumeExisting = phase === "paused" && Boolean(currentRef.current);
+    if (!hydrated || operationControllerRef.current.isBusy() || ["connecting", "listening", "committing", "understanding", "tool_running", "revising", "speaking", "interrupted"].includes(connection.status)) return;
+    const resumeExisting = Boolean(currentRef.current);
     await unlockSounds();
     playSound("listen");
     if (!resumeExisting) setPhase("connecting");
@@ -497,12 +530,6 @@ export function TodayPage() {
       clearSessionTimers();
       setPhase(currentRef.current ? "paused" : "error");
     }
-  }
-
-  function toggleMute() {
-    const next = !muted;
-    voiceSessionCoordinator.mute("today", next);
-    setMuted(next);
   }
 
   async function applyTagEdit(remove = false) {
@@ -520,7 +547,7 @@ export function TodayPage() {
   }
 
   const tags = intentTags(intent);
-  const activeVoice = voiceSnapshot.owner === "today" && ["connecting", "listening", "thinking", "speaking", "interrupted"].includes(voiceSnapshot.status);
+  const activeVoice = voiceSnapshot.owner === "today" && ["connecting", "listening", "committing", "understanding", "tool_running", "revising", "speaking", "interrupted"].includes(voiceSnapshot.status);
   const visualState = voiceVisualState(phase, voiceSnapshot.status);
   const status = voiceStatus(phase, voiceSnapshot);
   const isMock = process.env.NEXT_PUBLIC_VOICE_MODE !== "live";
@@ -551,7 +578,7 @@ export function TodayPage() {
       <SwiperSlide><section className="pager-slide" aria-label="Today page" aria-hidden={activePage !== 0} inert={activePage !== 0 ? true : undefined}><div className="page-column">
         <header className="today-topbar">
           <button className="today-nav-link" type="button" onClick={() => pagerRef.current?.slideTo(1)} aria-label="Open wardrobe"><Shirt size={18} /><span>Wardrobe</span></button>
-          <div className="weather-pill">{weather?.summary ?? "58° · Light rain"}</div>
+          <div className="weather-pill">{weather ? `${weather.summary}${weatherSource === "fixed-demo" ? " · Demo" : ""}` : "Weather unavailable"}</div>
           <Link className="icon-button" href="/settings" aria-label="Open settings"><Settings size={20} /></Link>
         </header>
         <div className="today-stage">
@@ -564,7 +591,17 @@ export function TodayPage() {
             {phase === "error" && <ErrorState key="error" />}
           </AnimatePresence>
         </div>
-        {phase !== "confirmed" && <VoiceDock state={visualState} status={status} active={activeVoice} muted={muted} disabled={!hydrated} onPrimary={activeVoice ? undefined : () => void startSession()} onMute={activeVoice ? toggleMute : undefined} onEnd={activeVoice ? () => void disconnectVoice(currentRef.current ? "paused" : "idle") : undefined} />}
+        <VoiceDock
+          state={visualState}
+          status={status}
+          active={activeVoice}
+          disabled={!hydrated}
+          onPrimary={() => {
+            if (voiceSnapshot.owner === "today" && voiceSnapshot.status === "listening") voiceSessionCoordinator.commitTurn("today");
+            else if (voiceSnapshot.owner === "today" && voiceSnapshot.status === "speaking") voiceSessionCoordinator.interruptAndListen("today");
+            else void startSession();
+          }}
+        />
         <BottomSheet open={Boolean(editingTag)} onClose={() => setEditingTag(null)} label="Edit today’s intent">{editingTag && <IntentTagSheet tag={editingTag} value={tagDraft} onChange={setTagDraft} onSave={() => void applyTagEdit()} onRemove={() => void applyTagEdit(true)} />}</BottomSheet>
       </div></section></SwiperSlide>
       <SwiperSlide><section className="pager-slide" aria-label="Wardrobe slide" aria-hidden={activePage !== 1} inert={activePage !== 1 ? true : undefined}><WardrobePanel embedded onBack={() => pagerRef.current?.slideTo(0)} /></section></SwiperSlide>

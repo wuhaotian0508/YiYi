@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { RealtimeAgent, RealtimeSession, tool } from "@openai/agents/realtime";
-import { ApiErrorSchema, DailyIntentSchema, IntentDeltaSchema, PreferenceDeltaSchema, type IntentDelta, type PreferenceDelta } from "@/domain/schemas";
+import { ApiErrorSchema, DailyIntentSchema, OutfitSlotSchema, PreferenceDeltaSchema, type PreferenceDelta } from "@/domain/schemas";
 import { realtimeAgentInstructions } from "@/prompts/realtime-agent";
 import { logVoiceDiagnostic, type VoiceDiagnostic } from "@/lib/realtime/voice-diagnostics";
+import { VoiceTurnController, type VoiceTurnState } from "@/lib/realtime/voice-turn-controller";
 
-export type VoiceState = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "interrupted" | "error";
+export type VoiceState = VoiceTurnState;
 export type TranscriptState = { role: "user" | "assistant"; text: string; final: boolean };
-export type VoiceFailureStage = "permission" | "token" | "session" | "webrtc" | "ready" | "tool" | "recommendation" | "persistence" | "audio" | "cleanup" | "lifecycle";
+export type VoiceFailureStage = "permission" | "token" | "session" | "webrtc" | "ready" | "tool" | "recommendation" | "mutation" | "persistence" | "audio" | "cleanup" | "lifecycle";
 
 export class VoiceConnectionFailure extends Error {
   readonly stage: VoiceFailureStage;
@@ -32,6 +33,8 @@ export interface VoiceSessionAdapter {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   mute(muted: boolean): void;
+  commitTurn?(): void;
+  interruptAndListen?(): void;
   onState(listener: (state: VoiceState) => void): () => void;
   onTranscript(listener: (transcript: TranscriptState) => void): () => void;
   onFailure(listener: (failure: VoiceConnectionFailure) => void): () => void;
@@ -44,13 +47,24 @@ export type VoiceToolResult = {
   failureStage?: "tool" | "recommendation" | "persistence" | "lifecycle";
   errorCode?: string;
   zodIssuePaths?: string[];
+  changedSlots?: string[];
+  removedItemIds?: string[];
+  addedItemIds?: string[];
+  outfitVersionId?: string;
 };
+
+export const VoiceTurnActionSchema = z.object({
+  action: z.enum(["revise", "remove", "random", "undo", "confirm", "set_availability", "save_preference", "no_change"]),
+  userRequest: z.string().min(1).max(300),
+  targetSlot: OutfitSlotSchema.nullable(),
+  targetDescription: z.string().max(80).nullable(),
+  availability: z.enum(["available", "laundry", "unavailable"]).nullable(),
+}).strict();
+export type VoiceTurnAction = z.infer<typeof VoiceTurnActionSchema>;
 
 export type VoiceToolHandlers = {
   requestRecommendation(intent: z.infer<typeof DailyIntentSchema>): Promise<VoiceToolResult>;
-  revise(input: IntentDelta): Promise<VoiceToolResult>;
-  confirm(note: string | null): Promise<VoiceToolResult>;
-  setAvailability(input: { itemId: string | null; availability: "available" | "laundry" | "unavailable"; reason: string | null }): Promise<VoiceToolResult>;
+  handleTurn(input: VoiceTurnAction): Promise<VoiceToolResult>;
   savePreference(input: PreferenceDelta): Promise<VoiceToolResult>;
 };
 
@@ -69,9 +83,9 @@ export function resolveAvailabilityItemId(explicitItemId: string | null, focused
 
 export const yiyiTurnDetection = {
   type: "semantic_vad",
-  eagerness: "high",
+  eagerness: "auto",
   createResponse: true,
-  interruptResponse: true,
+  interruptResponse: false,
 } as const;
 
 const INITIAL_RECOMMENDATION_TOOL = "request_outfit_recommendation";
@@ -83,6 +97,10 @@ const VoiceToolResultSchema = z.object({
   failureStage: z.enum(["tool", "recommendation", "persistence", "lifecycle"]).optional(),
   errorCode: z.string().optional(),
   zodIssuePaths: z.array(z.string()).optional(),
+  changedSlots: z.array(z.string()).optional(),
+  removedItemIds: z.array(z.string()).optional(),
+  addedItemIds: z.array(z.string()).optional(),
+  outfitVersionId: z.string().uuid().optional(),
 }).passthrough();
 
 function parseVoiceToolResult(result: string) {
@@ -118,8 +136,6 @@ function retryAfterMilliseconds(response: Response) {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
 
-const ConfirmToolSchema = z.object({ note: z.string().max(160).nullable() }).strict();
-const AvailabilityToolSchema = z.object({ itemId: z.string().uuid().nullable(), availability: z.enum(["available", "laundry", "unavailable"]), reason: z.string().max(120).nullable() }).strict();
 const InitialRecommendationVoiceSchema = DailyIntentSchema.extend({
   activities: DailyIntentSchema.shape.activities.default([]),
   aestheticTerms: DailyIntentSchema.shape.aestheticTerms.default([]),
@@ -179,9 +195,7 @@ export function createRealtimeVoiceTools(handlers: VoiceToolHandlers, purpose: V
   if (purpose === "fine-tune") return [preferenceTool];
   return [
     strictRealtimeTool({ name: "request_outfit_recommendation", description: "Select one decisive outfit from an internal pool of legal candidates. Extract only what the user said; omitted lists and priorities receive safe application defaults. Put an explicitly requested available wardrobe item ID in requiredItemIds.", schema: InitialRecommendationVoiceSchema, timeoutMs: 25_000, execute: (input) => handlers.requestRecommendation(input) }),
-    strictRealtimeTool({ name: "revise_current_outfit", description: "Return a complete structured delta for targeted, global, random, or undo operations. Encode warmth, comfort, formality, colorfulness, preservation, required items, and exclusions explicitly; rawUtterance alone never changes the outfit.", schema: IntentDeltaSchema, timeoutMs: 20_000, execute: (input) => handlers.revise(input) }),
-    strictRealtimeTool({ name: "confirm_current_outfit", description: "Confirm and persist the current outfit before telling the user it is decided.", schema: ConfirmToolSchema, timeoutMs: 8_000, execute: ({ note }) => handlers.confirm(note) }),
-    strictRealtimeTool({ name: "set_item_availability", description: "Mark an explicit item ID or the currently focused wardrobe item available, in laundry, or unavailable. Pass null when no item ID is known.", schema: AvailabilityToolSchema, timeoutMs: 8_000, execute: (input) => handlers.setAvailability(input) }),
+    strictRealtimeTool({ name: "handle_outfit_turn", description: "Route every follow-up turn through one verified application action. Supply the user's concise request, an optional semantic target slot/description, and availability only for an availability action. Use no_change for background speech or conversation that should not mutate the outfit.", schema: VoiceTurnActionSchema, timeoutMs: 25_000, execute: (input) => handlers.handleTurn(input) }),
     preferenceTool,
   ];
 }
@@ -195,11 +209,14 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
   private readonly transcriptListeners = new Set<(transcript: TranscriptState) => void>();
   private readonly failureListeners = new Set<(failure: VoiceConnectionFailure) => void>();
   private currentState: VoiceState = "idle";
+  private readonly turnController: VoiceTurnController;
   private connected = false;
   private initialRecommendationPending: boolean;
   private initialTurnCommitted = false;
   private initialToolStarted = false;
   private initialToolWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private followupToolWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private turnAwaitingTool = false;
   private readonly transcriptSignatures: Record<TranscriptState["role"], string> = { user: "", assistant: "" };
   private readonly diagnostic: (diagnostic: VoiceDiagnostic) => void;
   private readonly now: () => number;
@@ -211,6 +228,10 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
     this.diagnostic = options.diagnostic ?? (process.env.NODE_ENV === "test" ? () => undefined : logVoiceDiagnostic);
     this.now = options.now ?? Date.now;
     this.startedAt = this.now();
+    this.turnController = new VoiceTurnController({
+      publish: (state) => this.publishState(state),
+      setMicrophoneMuted: (muted) => this.session?.mute(muted),
+    });
   }
 
   connect() {
@@ -232,7 +253,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
     this.session = null;
     const connectAbortController = new AbortController();
     this.connectAbortController = connectAbortController;
-    this.emitState("connecting");
+    this.turnController.connecting();
     let session: RealtimeSession | null = null;
     try {
       let response: Response;
@@ -267,27 +288,16 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
       const parsedToken = z.object({ value: z.string().min(1), model: z.string().min(1), voice: z.string().min(1) }).safeParse(payload);
       if (!parsedToken.success) throw new VoiceConnectionFailure({ stage: "token", code: "TOKEN_RESPONSE_INVALID", httpStatus: response.status });
       const token = parsedToken.data;
-      let runtimeToolsReady: Promise<void> | null = null;
-      let initialRecommendationInvocation: Promise<VoiceToolResult> | null = null;
-      const runtimeHandlers: VoiceToolHandlers = this.initialRecommendationPending
-        ? {
-            ...this.handlers,
-            requestRecommendation: (input) => {
-              if (!initialRecommendationInvocation) {
-                initialRecommendationInvocation = (async () => {
-                  if (!runtimeToolsReady) {
-                    throw new VoiceConnectionFailure({ stage: "lifecycle", code: "INITIAL_TOOL_NOT_STARTED" });
-                  }
-                  await runtimeToolsReady;
-                  return this.handlers.requestRecommendation(input);
-                })();
-              }
-              return initialRecommendationInvocation;
-            },
-          }
-        : this.handlers;
+      let followupInvocation: Promise<VoiceToolResult> | null = null;
+      const sessionHandlers: VoiceToolHandlers = {
+        ...this.handlers,
+        handleTurn: (input) => {
+          followupInvocation ??= this.handlers.handleTurn(input);
+          return followupInvocation;
+        },
+      };
       let agentTools;
-      try { agentTools = createRealtimeVoiceTools(runtimeHandlers, this.options.purpose); }
+      try { agentTools = createRealtimeVoiceTools(sessionHandlers, this.options.purpose); }
       catch (error) { throw new VoiceConnectionFailure({ stage: "session", code: "TOOL_DEFINITION_FAILED", errorType: error instanceof Error ? error.name : "UnknownError" }); }
       const fineTuneInstructions = "Listen for explicit, lasting clothing or style preferences. For each distinct preference, call save_explicit_preference with a complete structured delta. Example: 'I usually prefer silver jewelry' is attribute metal, value silver, polarity more, soft strength, jewelry category and slot. 'I usually avoid black and white together' is one combination signal with both values, never two color bans. Do not infer the opposite preference, turn uncertainty into a hard rule, or save today's temporary needs. Only say it was added after the tool returns success. Do not recommend an outfit.";
       const instructions = this.options.purpose === "fine-tune" ? fineTuneInstructions : realtimeAgentInstructions;
@@ -312,7 +322,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           historyStoreAudio: false,
           config: {
             audio: { input: { turnDetection: yiyiTurnDetection } },
-            ...(this.initialRecommendationPending ? { toolChoice: "required" as const } : {}),
+            ...(this.options.purpose === "today" ? { toolChoice: "required" as const } : {}),
           },
         });
       } catch (error) { throw new VoiceConnectionFailure({ stage: "session", code: "SESSION_CONSTRUCTION_FAILED", errorType: error instanceof Error ? error.name : "UnknownError" }); }
@@ -322,18 +332,22 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
         if (!isActive()) return;
         const audioStartedAt = this.now();
         this.record("audio", "started", { audioStartedAt, speechStoppedAt: this.speechStoppedAt });
-        this.emitState("speaking");
+        this.turnController.audioStarted();
       });
       session.on("audio_stopped", () => {
         if (!isActive()) return;
-        if (this.initialRecommendationPending && this.initialTurnCommitted) {
-          this.emitState("thinking");
+        const activeSession = session;
+        if (!activeSession) return;
+        if (this.turnAwaitingTool || (this.initialRecommendationPending && this.initialTurnCommitted)) {
+          this.turnController.awaitingTool();
           return;
         }
-        this.emitState("listening");
+        if (this.options.purpose === "today") activeSession.transport.updateSessionConfig({ toolChoice: "required" });
+        this.turnController.audioStopped();
+        followupInvocation = null;
       });
-      session.on("audio_interrupted", () => { if (isActive()) this.emitState("interrupted"); });
-      session.on("agent_start", () => { if (isActive()) this.emitState("thinking"); });
+      session.on("audio_interrupted", () => { if (isActive() && this.currentState === "speaking") this.turnController.audioStopped(); });
+      session.on("agent_start", () => { if (isActive()) this.turnController.agentStarted(); });
       session.on("agent_tool_start", (_context, _agent, activeTool) => {
         const activeSession = session;
         if (!isActive() || !activeSession) return;
@@ -341,33 +355,58 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
         if (this.initialRecommendationPending && !this.initialToolStarted && activeTool.name === INITIAL_RECOMMENDATION_TOOL) {
           this.initialToolStarted = true;
           this.clearInitialToolWatchdog();
-          activeSession.transport.updateSessionConfig({ toolChoice: "auto" });
-          runtimeToolsReady = activeSession.updateAgent(runtimeAgent).then(() => {
-            if (isActive()) activeSession.transport.updateSessionConfig({ toolChoice: "auto" });
-          });
-          void runtimeToolsReady.catch(() => undefined);
         }
+        this.clearFollowupToolWatchdog();
+        // Require exactly one application action per committed turn, then let
+        // the model speak from its verified result without forcing a tool loop.
+        if (this.options.purpose === "today") activeSession.transport.updateSessionConfig({ toolChoice: "auto" });
         this.record("tool", "started", { toolName: activeTool.name, toolStartAt, speechStoppedAt: this.speechStoppedAt });
-        this.emitState("thinking");
+        this.turnController.toolStarted(activeTool.name);
       });
       session.on("agent_tool_end", (_context, _agent, activeTool, result) => {
         if (!isActive()) return;
+        const activeSession = session;
+        if (!activeSession) return;
         const toolEndAt = this.now();
         const parsed = parseVoiceToolResult(result);
         const success = parsed.success && parsed.data.success;
+        this.turnAwaitingTool = false;
         this.record("tool", success ? "success" : "error", {
           toolName: activeTool.name,
           toolEndAt,
           success,
           speechStoppedAt: this.speechStoppedAt,
-          ...(success && activeTool.name === INITIAL_RECOMMENDATION_TOOL ? { outfitCommittedAt: toolEndAt } : {}),
+          ...(success && parsed.success && parsed.data.outfitVersionId ? { outfitCommittedAt: toolEndAt } : {}),
           ...(!success && parsed.success ? { errorCode: parsed.data.errorCode, zodIssuePaths: parsed.data.zodIssuePaths } : {}),
         });
-        if (!this.initialRecommendationPending || activeTool.name !== INITIAL_RECOMMENDATION_TOOL) return;
+        if (success && parsed.success && parsed.data.outfitVersionId) this.record("mutation", "success", { outfitCommittedAt: toolEndAt, outfitVersionId: parsed.data.outfitVersionId });
+        if (!this.initialRecommendationPending || activeTool.name !== INITIAL_RECOMMENDATION_TOOL) {
+          if (success) {
+            this.turnController.toolEnded(true);
+            return;
+          }
+          const failure = new VoiceConnectionFailure({
+            stage: parsed.success ? parsed.data.failureStage ?? "tool" : "tool",
+            code: parsed.success ? parsed.data.errorCode ?? "VOICE_ACTION_FAILED" : "TOOL_RESULT_INVALID",
+            zodIssuePaths: parsed.success ? parsed.data.zodIssuePaths : undefined,
+          });
+          this.emitFailure(failure);
+          this.turnController.toolEnded(false);
+          return;
+        }
         if (success) {
           this.initialRecommendationPending = false;
           this.initialTurnCommitted = false;
           this.clearInitialToolWatchdog();
+          void activeSession.updateAgent(runtimeAgent).then(() => {
+            if (!isActive()) return;
+          }).catch((error: unknown) => {
+            if (!isActive()) return;
+            const failure = new VoiceConnectionFailure({ stage: "lifecycle", code: "RUNTIME_AGENT_SWITCH_FAILED", errorType: error instanceof Error ? error.name : typeof error });
+            this.emitFailure(failure);
+            this.turnController.fail();
+          });
+          this.turnController.toolEnded(true);
           return;
         }
         const failure = new VoiceConnectionFailure({
@@ -376,36 +415,39 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           zodIssuePaths: parsed.success ? parsed.data.zodIssuePaths : undefined,
         });
         this.emitFailure(failure);
-        this.emitState("error");
+        this.turnController.toolEnded(false);
       });
       session.on("error", (event) => {
         if (!isActive()) return;
         const failure = classifyRealtimeSessionFailure(event, this.connected, this.currentState);
         this.record(failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, zodIssuePaths: failure.zodIssuePaths });
         this.emitFailure(failure);
-        this.emitState("error");
+        this.turnController.fail();
       });
       session.on("transport_event", (event) => {
         if (!isActive()) return;
         if (event.type === "input_audio_buffer.speech_started") {
-          if (!this.initialRecommendationPending) this.initialTurnCommitted = false;
-          this.emitState("listening");
+          if (this.currentState === "listening") followupInvocation = null;
+          this.turnController.speechStarted();
         }
         if (event.type === "input_audio_buffer.speech_stopped") {
+          if (this.currentState !== "listening") return;
           this.speechStoppedAt = this.now();
           this.initialTurnCommitted = this.initialRecommendationPending;
+          this.turnAwaitingTool = true;
           this.record("recommendation", "started", { speechStoppedAt: this.speechStoppedAt });
           if (this.initialRecommendationPending && !this.initialToolStarted) this.startInitialToolWatchdog();
-          this.emitState("thinking");
+          else this.startFollowupToolWatchdog();
+          this.turnController.speechStopped();
         }
       });
       session.transport.on("connection_change", (status) => {
         if (!isActive()) return;
-        if (status === "connecting") this.emitState("connecting");
+        if (status === "connecting") this.turnController.connecting();
         if (status === "disconnected") {
           if (!this.connected) return;
           this.emitFailure(new VoiceConnectionFailure({ stage: "webrtc", code: "WEBRTC_DISCONNECTED" }));
-          this.emitState("error");
+          this.turnController.fail();
         }
       });
       session.on("history_updated", (history) => {
@@ -433,24 +475,42 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
       if (!isActive()) { session.close(); return; }
       this.connected = true;
       if (this.connectAbortController === connectAbortController) this.connectAbortController = null;
-      this.emitState("listening");
+      this.turnController.connected();
     } catch (error) {
       if (this.session === session) this.session = null;
       this.connected = false;
       session?.close();
       if (this.connectAbortController === connectAbortController) this.connectAbortController = null;
       if (connectAbortController.signal.aborted || generation !== this.connectGeneration) return;
-      this.emitState("error");
+      this.turnController.fail();
       throw error;
     }
   }
 
-  async disconnect() { this.connectGeneration += 1; this.connectPromise = null; this.connectAbortController?.abort(); this.connectAbortController = null; this.clearInitialToolWatchdog(); const session = this.session; this.session = null; this.connected = false; session?.close(); this.emitState("idle"); }
+  async disconnect() { this.connectGeneration += 1; this.connectPromise = null; this.connectAbortController?.abort(); this.connectAbortController = null; this.clearInitialToolWatchdog(); this.clearFollowupToolWatchdog(); this.turnAwaitingTool = false; const session = this.session; this.session = null; this.connected = false; session?.close(); this.turnController.idle(); }
   mute(muted: boolean) { this.session?.mute(muted); }
+  commitTurn() {
+    this.turnController.primaryAction({
+      commit: () => {
+        this.turnAwaitingTool = true;
+        if (this.initialRecommendationPending) {
+          this.initialTurnCommitted = true;
+          this.startInitialToolWatchdog();
+        } else this.startFollowupToolWatchdog();
+        this.record("lifecycle", "started", { turnCommittedAt: this.now() });
+        this.session?.transport.sendEvent({ type: "input_audio_buffer.commit" });
+        this.session?.transport.requestResponse?.();
+      },
+      interrupt: () => undefined,
+    });
+  }
+  interruptAndListen() {
+    this.turnController.primaryAction({ commit: () => undefined, interrupt: () => this.session?.interrupt() });
+  }
   onState(listener: (state: VoiceState) => void) { this.stateListeners.add(listener); return () => this.stateListeners.delete(listener); }
   onTranscript(listener: (transcript: TranscriptState) => void) { this.transcriptListeners.add(listener); return () => this.transcriptListeners.delete(listener); }
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failureListeners.add(listener); return () => this.failureListeners.delete(listener); }
-  private emitState(state: VoiceState) { this.currentState = state; this.stateListeners.forEach((listener) => listener(state)); }
+  private publishState(state: VoiceState) { this.currentState = state; this.stateListeners.forEach((listener) => listener(state)); }
   private emitTranscript(transcript: TranscriptState) { this.transcriptListeners.forEach((listener) => listener(transcript)); }
   private emitFailure(failure: VoiceConnectionFailure) { this.failureListeners.forEach((listener) => listener(failure)); }
   private startInitialToolWatchdog() {
@@ -461,12 +521,28 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
       const failure = new VoiceConnectionFailure({ stage: "recommendation", code: "INITIAL_RECOMMENDATION_TIMEOUT" });
       this.record("recommendation", "error", { errorCode: failure.code, speechStoppedAt: this.speechStoppedAt });
       this.emitFailure(failure);
-      this.emitState("error");
+      this.turnController.fail();
     }, INITIAL_TOOL_WATCHDOG_MS);
   }
   private clearInitialToolWatchdog() {
     if (this.initialToolWatchdog) clearTimeout(this.initialToolWatchdog);
     this.initialToolWatchdog = null;
+  }
+  private startFollowupToolWatchdog() {
+    this.clearFollowupToolWatchdog();
+    this.followupToolWatchdog = setTimeout(() => {
+      this.followupToolWatchdog = null;
+      if (!this.turnAwaitingTool || this.initialRecommendationPending) return;
+      this.turnAwaitingTool = false;
+      const failure = new VoiceConnectionFailure({ stage: "tool", code: "VOICE_ACTION_TIMEOUT" });
+      this.record("tool", "error", { errorCode: failure.code, speechStoppedAt: this.speechStoppedAt });
+      this.emitFailure(failure);
+      this.turnController.fail();
+    }, INITIAL_TOOL_WATCHDOG_MS);
+  }
+  private clearFollowupToolWatchdog() {
+    if (this.followupToolWatchdog) clearTimeout(this.followupToolWatchdog);
+    this.followupToolWatchdog = null;
   }
   private record(stage: VoiceFailureStage, result: VoiceDiagnostic["result"], extra: Partial<VoiceDiagnostic> = {}) {
     if (!this.options.attemptId || this.options.sessionGeneration === undefined) return;
@@ -495,11 +571,14 @@ export class MockVoiceSessionAdapter implements VoiceSessionAdapter {
     if (this.autoSubmit) this.timers.push(window.setTimeout(() => this.submitDemoTurn(), 1050));
   }
   submitDemoTurn() {
-    this.stateListeners.forEach((listener) => listener("thinking"));
+    this.stateListeners.forEach((listener) => listener("understanding"));
     this.transcriptListeners.forEach((listener) => listener({ role: "user", text: "Gallery this afternoon, dinner tonight, lots of walking, and no dresses.", final: true }));
+    this.stateListeners.forEach((listener) => listener("listening"));
   }
   async disconnect() { this.timers.forEach(window.clearTimeout); this.timers = []; this.stateListeners.forEach((listener) => listener("idle")); }
   mute() {}
+  commitTurn() { this.submitDemoTurn(); }
+  interruptAndListen() { this.stateListeners.forEach((listener) => listener("listening")); }
   onState(listener: (state: VoiceState) => void) { this.stateListeners.add(listener); return () => this.stateListeners.delete(listener); }
   onTranscript(listener: (transcript: TranscriptState) => void) { this.transcriptListeners.add(listener); return () => this.transcriptListeners.delete(listener); }
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failureListeners.add(listener); return () => this.failureListeners.delete(listener); }

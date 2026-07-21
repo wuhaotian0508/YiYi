@@ -136,9 +136,9 @@ function VoiceReview() {
   const active = state !== "idle" && state !== "error";
   return <section className={styles.simpleScenario} data-review-scenario="voice">
     <h1>Voice states</h1><p>Production Voice Core and Dock driven from one explicit state.</p>
-    <div className={styles.stateRail}>{(["idle", "connecting", "listening", "thinking", "speaking", "interrupted", "error"] as VoiceVisualState[]).map((value) => <button type="button" aria-pressed={state === value} key={value} onClick={() => setState(value)}>{value}</button>)}</div>
+    <div className={styles.stateRail}>{(["idle", "connecting", "listening", "committing", "understanding", "tool_running", "revising", "speaking", "interrupted", "recoverable_error"] as VoiceVisualState[]).map((value) => <button type="button" aria-pressed={state === value} key={value} onClick={() => setState(value)}>{value}</button>)}</div>
     <div className={styles.voicePreview}><VoiceCore state={state} label={`YiYi ${state}`} /></div>
-    <VoiceDock state={state} status={state === "error" ? "Voice connection failed · Tap to retry" : state === "idle" ? "Tap to talk" : `${state[0].toUpperCase()}${state.slice(1)}…`} active={active} onPrimary={() => setState(active ? "interrupted" : "connecting")} onMute={active ? () => undefined : undefined} onEnd={active ? () => setState("idle") : undefined} />
+    <VoiceDock state={state} status={state === "error" ? "Voice connection failed · Tap to retry" : state === "idle" ? "Tap to talk" : `${state[0].toUpperCase()}${state.slice(1)}…`} active={active} onPrimary={() => setState(active ? "interrupted" : "connecting")} />
   </section>;
 }
 

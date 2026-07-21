@@ -14,8 +14,9 @@ afterEach(() => {
 });
 
 describe("audit regressions", () => {
-  it("seeds demo clothes once, but never for personal mode or after a completed seed", () => {
-    expect(shouldSeedDemoWardrobe({ mode: null, alreadySeeded: false, itemCount: 0, environmentEnabled: true })).toBe(true);
+  it("seeds demo clothes only after an explicit choice", () => {
+    expect(shouldSeedDemoWardrobe({ mode: null, alreadySeeded: false, itemCount: 0, environmentEnabled: true })).toBe(false);
+    expect(shouldSeedDemoWardrobe({ mode: null, alreadySeeded: false, itemCount: 0, explicit: true })).toBe(true);
     expect(shouldSeedDemoWardrobe({ mode: "personal", alreadySeeded: false, itemCount: 0, environmentEnabled: true })).toBe(false);
     expect(shouldSeedDemoWardrobe({ mode: "demo", alreadySeeded: true, itemCount: 0, environmentEnabled: true })).toBe(false);
     expect(shouldSeedDemoWardrobe({ mode: null, alreadySeeded: false, itemCount: 0, environmentEnabled: false })).toBe(false);
@@ -42,21 +43,19 @@ describe("audit regressions", () => {
     expect(resolveAvailabilityItemId(null, null)).toBeNull();
   });
 
-  it("uses eager semantic turn detection for the first recommendation with automatic response and interruption", () => {
+  it("uses semantic turn detection without automatic noise interruption", () => {
     expect(yiyiTurnDetection).toEqual({
       type: "semantic_vad",
-      eagerness: "high",
+      eagerness: "auto",
       createResponse: true,
-      interruptResponse: true,
+      interruptResponse: false,
     });
   });
 
   it("aborts a pending token request when live voice disconnects", async () => {
     const handlers: VoiceToolHandlers = {
       requestRecommendation: async () => ({ success: false, summary: "unused" }),
-      revise: async () => ({ success: false, summary: "unused" }),
-      confirm: async () => ({ success: false, summary: "unused" }),
-      setAvailability: async () => ({ success: false, summary: "unused" }),
+      handleTurn: async () => ({ success: false, summary: "unused" }),
       savePreference: async () => ({ success: false, summary: "unused" }),
     };
     const states: string[] = [];
@@ -76,9 +75,7 @@ describe("audit regressions", () => {
   it("reuses one pending live voice connection instead of requesting another token", async () => {
     const handlers: VoiceToolHandlers = {
       requestRecommendation: async () => ({ success: false, summary: "unused" }),
-      revise: async () => ({ success: false, summary: "unused" }),
-      confirm: async () => ({ success: false, summary: "unused" }),
-      setAvailability: async () => ({ success: false, summary: "unused" }),
+      handleTurn: async () => ({ success: false, summary: "unused" }),
       savePreference: async () => ({ success: false, summary: "unused" }),
     };
     let tokenRequests = 0;
@@ -104,9 +101,7 @@ describe("audit regressions", () => {
   it("preserves token 429 status and Retry-After without retrying", async () => {
     const handlers: VoiceToolHandlers = {
       requestRecommendation: async () => ({ success: false, summary: "unused" }),
-      revise: async () => ({ success: false, summary: "unused" }),
-      confirm: async () => ({ success: false, summary: "unused" }),
-      setAvailability: async () => ({ success: false, summary: "unused" }),
+      handleTurn: async () => ({ success: false, summary: "unused" }),
       savePreference: async () => ({ success: false, summary: "unused" }),
     };
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
@@ -133,15 +128,15 @@ describe("audit regressions", () => {
     expect(payload.weather.summary).toBe("58° · Light rain");
   });
 
-  it("makes competition demo weather explicit and restores persisted weather only when fresh weather fails", () => {
-    vi.stubEnv("NEXT_PUBLIC_WEATHER_MODE", "fixed-demo");
+  it("defaults to device weather and restores persisted weather only when fresh weather fails", () => {
+    vi.stubEnv("NEXT_PUBLIC_WEATHER_MODE", "device-location");
     const fresh = { minApparentTempC: 10, maxApparentTempC: 14, precipitationProbability: 5, expectedRain: false, windy: false, summary: "Fresh", sourceTimestamp: 2 };
     const persisted = { ...fresh, summary: "Persisted", sourceTimestamp: 1 };
-    expect(configuredWeatherMode()).toBe("fixed-demo");
+    expect(configuredWeatherMode()).toBe("device-location");
     expect(resolveWeatherForSession(fresh, persisted)).toBe(fresh);
     expect(resolveWeatherForSession(null, persisted)).toBe(persisted);
     expect(resolveWeatherForSession(null, null)).toBeNull();
-    vi.stubEnv("NEXT_PUBLIC_WEATHER_MODE", "device-location");
+    vi.stubEnv("NEXT_PUBLIC_WEATHER_MODE", "unexpected");
     expect(configuredWeatherMode()).toBe("invalid");
   });
 

@@ -64,8 +64,8 @@ describe("Today live voice recovery", () => {
     await screen.findByText("YiYi couldn’t finish that.");
     expect(tokenRequests).toBe(1);
     expect(screen.queryByText("Listening…")).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Start live voice session" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Start live voice session" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry live voice" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Retry live voice" }));
     await waitFor(() => expect(tokenRequests).toBe(2));
   });
 

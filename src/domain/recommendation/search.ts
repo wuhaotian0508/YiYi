@@ -2,6 +2,7 @@ import { OutfitItemIdsSchema, type Outfit, type OutfitSlot } from "@/domain/sche
 import { RecommendationError, type RecommendationContext } from "@/domain/recommendation/context";
 import { slotCategories, validateOutfit, validatePartial, validateRequiredAnchors } from "@/domain/recommendation/constraints";
 import { outfitSimilarity, scoreCandidate, scoreItemHeuristic, scorePartialCompatibility } from "@/domain/recommendation/scoring";
+import { situationItemViolation } from "@/domain/recommendation/situation";
 
 type TemplateName = "separates" | "one_piece";
 type PartialCandidate = { template: TemplateName; itemIds: Partial<Record<OutfitSlot, string>>; partialScore: number };
@@ -37,10 +38,12 @@ function stagesFor(template: TemplateName, context: RecommendationContext, requi
 function choicesForSlot(slot: OutfitSlot, context: RecommendationContext, requiredSlots: Map<OutfitSlot, string>) {
   const required = requiredSlots.get(slot);
   if (required) return [required];
+  if (context.requiredEmptySlots.has(slot) || context.situation.slotPolicy[slot] === "forbidden") return [undefined];
   if (context.preserveSlots.has(slot) && context.currentOutfit) return [context.currentOutfit.itemIds[slot]];
   const currentId = context.currentOutfit?.itemIds[slot];
   const choices = context.wardrobe
     .filter((item) => slotCategories[slot].includes(item.category))
+    .filter((item) => !situationItemViolation(item, slot, context.situation))
     .filter((item) => !(context.operation === "targeted_revision" && context.targetSlots.has(slot) && item.id === currentId))
     .sort((a, b) => scoreItemHeuristic(b, context) - scoreItemHeuristic(a, context))
     .map((item) => item.id as string | undefined);

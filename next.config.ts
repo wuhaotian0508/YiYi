@@ -27,6 +27,12 @@ const securityHeaders = [
   },
 ];
 
+const sharpRuntimeFiles = [
+  "node_modules/.pnpm/sharp@0.34.5/node_modules/sharp/**/*",
+  "node_modules/.pnpm/@img+sharp-linux-x64@0.34.5/node_modules/@img/sharp-linux-x64/**/*",
+  "node_modules/.pnpm/@img+sharp-libvips-linux-x64@1.2.4/node_modules/@img/sharp-libvips-linux-x64/**/*",
+];
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   devIndicators: false,
@@ -37,6 +43,11 @@ const nextConfig: NextConfig = {
           "@/components/calibration/calibration-lab": "./src/components/calibration/calibration-lab-disabled.tsx",
         }
       : {},
+  },
+  outputFileTracingIncludes: {
+    "/api/wardrobe/process": sharpRuntimeFiles,
+    "/api/outfits/rank": sharpRuntimeFiles,
+    "/api/health/image": sharpRuntimeFiles,
   },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];

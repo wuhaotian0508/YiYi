@@ -5,10 +5,9 @@ import type { PreferenceProfile } from "@/domain/schemas";
 
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 const storage = vi.hoisted(() => ({
+  completeOnboarding: vi.fn(async ({ mode }: { mode: "demo" | "personal"; profile: PreferenceProfile }) => ({ status: "complete" as const, version: 1 as const, completedAt: 1, experienceMode: mode })),
   requestPersistentStorage: vi.fn(async () => ({ persisted: false, usage: 0, quota: 0 })),
   savePreferences: vi.fn<(profile: PreferenceProfile) => Promise<void>>(async () => undefined),
-  seedWardrobe: vi.fn(async (): Promise<void> => undefined),
-  setExperienceMode: vi.fn(async (): Promise<void> => undefined),
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
@@ -70,8 +69,7 @@ describe("onboarding preference persistence boundaries", () => {
       },
     });
     storage.savePreferences.mockResolvedValue(undefined);
-    storage.setExperienceMode.mockResolvedValue(undefined);
-    storage.seedWardrobe.mockResolvedValue(undefined);
+    storage.completeOnboarding.mockImplementation(async ({ mode }: { mode: "demo" | "personal"; profile: PreferenceProfile }) => ({ status: "complete", version: 1, completedAt: 1, experienceMode: mode }));
     storage.requestPersistentStorage.mockResolvedValue({ persisted: false, usage: 0, quota: 0 });
   });
 
@@ -126,7 +124,7 @@ describe("onboarding preference persistence boundaries", () => {
     await screen.findByText("Make it yours.");
     fireEvent.click(screen.getByRole("button", { name: "Add my clothes" }));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/wardrobe/add"));
-    const finalProfile = storage.savePreferences.mock.calls.at(-1)?.[0];
+    const finalProfile = storage.completeOnboarding.mock.calls.at(-1)?.[0].profile;
     const activeLabels = finalProfile?.preferenceSignals?.filter((signal) => signal.status === "active").map((signal) => signal.label);
     expect(activeLabels).toEqual(expect.arrayContaining(["Polished tailoring", "Relaxed tailoring"]));
   });
@@ -169,24 +167,27 @@ describe("onboarding preference persistence boundaries", () => {
 
   it("allows only one setup completion at a time even when both choices are tapped rapidly", async () => {
     const modeWrite = deferred<void>();
-    storage.setExperienceMode.mockImplementationOnce(() => modeWrite.promise);
+    storage.completeOnboarding.mockImplementationOnce(async ({ mode }: { mode: "demo" | "personal"; profile: PreferenceProfile }) => {
+      await modeWrite.promise;
+      return { status: "complete", version: 1, completedAt: 1, experienceMode: mode };
+    });
     await reachSetup();
 
     fireEvent.click(screen.getByRole("button", { name: "Try the example wardrobe" }));
     fireEvent.click(screen.getByRole("button", { name: "Add my clothes" }));
 
-    await waitFor(() => expect(storage.setExperienceMode).toHaveBeenCalledTimes(1));
-    expect(storage.setExperienceMode).toHaveBeenCalledWith("demo", true);
+    await waitFor(() => expect(storage.completeOnboarding).toHaveBeenCalledTimes(1));
+    expect(storage.completeOnboarding).toHaveBeenCalledWith(expect.objectContaining({ mode: "demo" }));
     expect(screen.getByRole("button", { name: "Saving setup…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Add my clothes" })).toBeDisabled();
 
     modeWrite.resolve();
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/today"));
-    expect(storage.seedWardrobe).toHaveBeenCalledTimes(1);
+    expect(storage.completeOnboarding).toHaveBeenCalledTimes(1);
   });
 
   it("shows a retryable setup persistence failure without marking onboarding complete", async () => {
-    storage.savePreferences.mockRejectedValueOnce(new Error("quota exceeded"));
+    storage.completeOnboarding.mockRejectedValueOnce(new Error("quota exceeded"));
     await reachSetup();
 
     fireEvent.click(screen.getByRole("button", { name: "Add my clothes" }));
@@ -196,9 +197,9 @@ describe("onboarding preference persistence boundaries", () => {
     expect(router.push).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Add my clothes" })).toBeEnabled();
 
-    storage.savePreferences.mockResolvedValue(undefined);
+    storage.completeOnboarding.mockImplementation(async ({ mode }: { mode: "demo" | "personal"; profile: PreferenceProfile }) => ({ status: "complete", version: 1, completedAt: 1, experienceMode: mode }));
     fireEvent.click(screen.getByRole("button", { name: "Add my clothes" }));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/wardrobe/add"));
-    expect(localStorage.getItem("yiyi:onboarding-complete")).toBe("true");
+    expect(localStorage.getItem("yiyi:onboarding-complete")).toBeNull();
   });
 });

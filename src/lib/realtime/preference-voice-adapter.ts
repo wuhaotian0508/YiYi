@@ -103,13 +103,13 @@ export class BrowserPreferenceVoiceAdapter implements VoiceSessionAdapter {
     recognition.continuous = false;
     recognition.onresult = (event) => {
       const text = event.results[event.results.length - 1]?.[0]?.transcript?.trim() ?? "";
-      if (!text) { this.emitFailure(new VoiceConnectionFailure({ stage: "session", code: "EMPTY_TRANSCRIPT" })); this.emitState("error"); return; }
+      if (!text) { this.emitFailure(new VoiceConnectionFailure({ stage: "session", code: "EMPTY_TRANSCRIPT" })); this.emitState("recoverable_error"); return; }
       this.receivedFinalResult = true;
       this.emitTranscript({ role: "user", text, final: true });
-      this.emitState("thinking");
+      this.emitState("understanding");
     };
-    recognition.onerror = () => { this.emitFailure(new VoiceConnectionFailure({ stage: "permission", code: "SPEECH_RECOGNITION_FAILED" })); this.emitState("error"); };
-    recognition.onend = () => { if (!this.intentionalStop && !this.receivedFinalResult) { this.emitFailure(new VoiceConnectionFailure({ stage: "session", code: "SPEECH_RECOGNITION_ENDED" })); this.emitState("error"); } };
+    recognition.onerror = () => { this.emitFailure(new VoiceConnectionFailure({ stage: "permission", code: "SPEECH_RECOGNITION_FAILED" })); this.emitState("recoverable_error"); };
+    recognition.onend = () => { if (!this.intentionalStop && !this.receivedFinalResult) { this.emitFailure(new VoiceConnectionFailure({ stage: "session", code: "SPEECH_RECOGNITION_ENDED" })); this.emitState("recoverable_error"); } };
     this.recognition = recognition;
     try { recognition.start(); }
     catch { this.recognition = null; throw new VoiceConnectionFailure({ stage: "permission", code: "MICROPHONE_START_FAILED" }); }

@@ -24,6 +24,7 @@ test.describe("release accessibility boundary", () => {
   });
 
   test("bottom sheet traps focus, closes with Escape, and restores the trigger", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("yiyi:onboarding-complete", "true"));
     await page.goto("/preferences");
     const region = page.getByRole("region", { name: "More of" });
     const trigger = region.getByRole("button", { name: "Edit" });

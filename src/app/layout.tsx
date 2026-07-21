@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { YiYiMotionProvider } from "@/components/motion/motion-provider";
+import { AppRouteGate } from "@/components/app-route-gate";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,5 +14,5 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#ffffff", colorScheme: "light" };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body><YiYiMotionProvider>{children}</YiYiMotionProvider></body></html>;
+  return <html lang="en"><body><YiYiMotionProvider><AppRouteGate>{children}</AppRouteGate></YiYiMotionProvider></body></html>;
 }

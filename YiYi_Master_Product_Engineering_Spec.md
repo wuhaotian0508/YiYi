@@ -1583,7 +1583,7 @@ Development model: `gpt-realtime-2.1-mini`.
 
 Initial voice: configure through `OPENAI_REALTIME_VOICE`; use `marin` only if supported by the installed API version.
 
-Use typed SDK session configuration. Configure semantic VAD with high eagerness and interruption for the first recommendation flow. Do not bypass TypeScript with `as any` to force an outdated config shape.
+Use typed SDK session configuration. Configure semantic VAD with automatic eagerness and automatic interruption disabled; manual commit and speaking interruption belong to the product turn controller. Do not bypass TypeScript with `as any` to force an outdated config shape.
 
 The adapter maps SDK typed events into:
 
@@ -1654,32 +1654,16 @@ Execution:
 6. update UI;
 7. return a short success summary to the agent.
 
-### `revise_current_outfit`
+### `handle_outfit_turn`
 
-Input:
-
-- target category or `overall`;
-- natural-language revision;
-- preserveUnmentionedItems default true;
-- optional referenced item ID.
-
-Execution uses deterministic revision logic and ranking only where needed.
-
-### `confirm_current_outfit`
-
-Input: optional short confirmation note.
-
-Execution saves final version and worn timestamps, then returns success.
-
-### `set_item_availability`
-
-Input:
-
-- item ID or currently focused item reference;
-- availability;
-- optional reason.
-
-Execution updates Dexie and re-runs recommendation if the active outfit becomes invalid.
+Every committed turn after the initial recommendation uses this single action
+router. Input is limited to an action, the concise user request, an optional
+semantic target slot/description, and availability only when relevant. The
+model never constructs internal confidence, ambiguity, UUID, preservation, or
+constraint fields. Local deterministic code builds and validates the internal
+delta, executes revision/random/undo/confirm/availability, verifies mutation
+postconditions, and returns changed slots, removed/added IDs, and the committed
+outfit version. Background audio uses `no_change` and cannot mutate state.
 
 ### `save_explicit_preference`
 

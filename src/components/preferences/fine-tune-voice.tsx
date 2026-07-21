@@ -194,9 +194,7 @@ export function FineTuneVoice({
       await coordinator.start("fine-tune", ({ attemptId, generation }) => {
         const handlers: VoiceToolHandlers = {
           requestRecommendation: async () => ({ success: false, summary: "This session only captures a style preference." }),
-          revise: async () => ({ success: false, summary: "This session only captures a style preference." }),
-          confirm: async () => ({ success: false, summary: "This session only captures a style preference." }),
-          setAvailability: async () => ({ success: false, summary: "This session only captures a style preference." }),
+          handleTurn: async () => ({ success: false, summary: "This session only captures a style preference." }),
           savePreference: (delta) => saveStructuredDelta(delta, generation),
         };
         return createAdapter({ attemptId, generation, mode: voiceMode, handlers });
@@ -215,9 +213,9 @@ export function FineTuneVoice({
   if (outcome !== "idle") status = outcome;
   else if (snapshot.owner === "fine-tune") {
     if (snapshot.status === "connecting") status = "connecting";
-    else if (snapshot.status === "thinking" || snapshot.status === "speaking") status = "understanding";
+    else if (["committing", "understanding", "tool_running", "revising", "speaking"].includes(snapshot.status)) status = "understanding";
     else if (snapshot.status === "listening" || snapshot.status === "interrupted") status = "listening";
-    else if (snapshot.status === "error" || snapshot.status === "rate_limited") status = "error";
+    else if (snapshot.status === "recoverable_error" || snapshot.status === "rate_limited") status = "error";
   }
   const failure = localFailure ?? {
     stage: snapshot.owner === "fine-tune" ? snapshot.stage : null,

@@ -9,6 +9,7 @@ import {
   type WeatherContext,
   type WardrobeItem,
 } from "@/domain/schemas";
+import { normalizeSituationProfile, type SituationProfile } from "@/domain/recommendation/situation";
 
 export const recommendationErrorCodes = [
   "NO_LEGAL_OUTFIT",
@@ -46,6 +47,7 @@ export type RecommendationContext = {
   operation: RecommendationOperation;
   targetSlots: Set<OutfitSlot>;
   preserveSlots: Set<OutfitSlot>;
+  requiredEmptySlots: Set<OutfitSlot>;
   requiredItemIds: Set<string>;
   excludedItemIds: Set<string>;
   excludedCategories: Set<WardrobeItem["category"]>;
@@ -55,6 +57,7 @@ export type RecommendationContext = {
   requestId: string;
   operationId: number;
   seed: number;
+  situation: SituationProfile;
 };
 
 const coreSlots: OutfitSlot[] = ["top", "bottom", "onePiece"];
@@ -123,6 +126,7 @@ export function createRecommendationContext(input: {
   const excludedItemIds = new Set(intent.excludedItemIds);
   const targetSlots = new Set<OutfitSlot>(input.delta?.targetSlots ?? []);
   const preserveSlots = new Set<OutfitSlot>(input.delta?.preserveSlots ?? []);
+  const requiredEmptySlots = new Set<OutfitSlot>(input.delta?.emptySlots ?? []);
 
   if (input.operation === "targeted_revision" && input.currentOutfit) {
     for (const slot of ["top", "bottom", "onePiece", "outerwear", "shoes", "bag", "jewelry", "extraAccessory"] as OutfitSlot[]) {
@@ -156,6 +160,7 @@ export function createRecommendationContext(input: {
     operation: input.operation,
     targetSlots,
     preserveSlots,
+    requiredEmptySlots,
     requiredItemIds,
     excludedItemIds,
     excludedCategories: new Set(intent.excludedCategories),
@@ -165,5 +170,6 @@ export function createRecommendationContext(input: {
     requestId,
     operationId: input.operationId ?? 0,
     seed: hashSeed(`${requestId}:${input.operationId ?? 0}`),
+    situation: normalizeSituationProfile(intent),
   };
 }

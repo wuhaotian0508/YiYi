@@ -20,8 +20,9 @@ import { applyPreferenceDelta, rebuildProfileFromSignals, removePreferenceSignal
 import { type CalibrationResponse, type PreferenceDelta, type PreferenceProfile, type PreferenceSignal, type WardrobeDirection } from "@/domain/schemas";
 import { unlockSounds } from "@/lib/audio/sound-system";
 import { calmSpring } from "@/lib/motion/tokens";
-import { requestPersistentStorage, savePreferences, seedWardrobe, setExperienceMode } from "@/lib/storage/db";
+import { completeOnboarding, requestPersistentStorage, savePreferences } from "@/lib/storage/db";
 import { demoWardrobe } from "@/mocks/wardrobe";
+import { fetchConfiguredWeather } from "@/lib/weather/client";
 
 type Stage = "intro" | "permission" | "denied" | "direction" | "calibrate" | "preferences" | "profile" | "setup";
 
@@ -72,16 +73,13 @@ export default function FirstRunPage() {
     setProfileDraft(next);
   }, [calibrationProfile]);
 
-  useEffect(() => {
-    if (localStorage.getItem("yiyi:onboarding-complete") === "true") router.replace("/today");
-  }, [router]);
-
   async function requestMicrophone() {
     await unlockSounds();
     if (process.env.NEXT_PUBLIC_VOICE_MODE === "mock") { setStage("direction"); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
+      void fetchConfiguredWeather();
       setStage("direction");
     } catch { setStage("denied"); }
   }
@@ -163,12 +161,9 @@ export default function FirstRunPage() {
     try {
       await preferenceMutationQueueRef.current;
       if (preferenceMutationErrorRef.current) throw new Error("A preference mutation failed before setup completion.");
-      await setExperienceMode(mode, mode === "demo");
-      if (mode === "demo") await seedWardrobe(demoWardrobe, { explicit: true });
-      await savePreferences(profileDraftRef.current);
+      const completion = await completeOnboarding({ mode, profile: profileDraftRef.current, demoItems: demoWardrobe });
       await requestPersistentStorage();
-      localStorage.setItem("yiyi:onboarding-complete", "true");
-      router.push(mode === "demo" ? "/today" : "/wardrobe/add");
+      router.push(completion.experienceMode === "demo" ? "/today" : "/wardrobe/add");
     } catch {
       setFinishError("Setup wasn’t saved. Your choices are still here — try again.");
     } finally {

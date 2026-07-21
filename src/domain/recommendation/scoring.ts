@@ -214,8 +214,19 @@ function outfitPreferenceAdjustment(items: WardrobeItem[], context: Recommendati
   return combinationAdjustment - Math.min(0.24, rejectedStylePenalty);
 }
 
+function situationFormalityTarget(context: RecommendationContext) {
+  const explicit = (context.intent.desiredFormality ?? 3) + context.profile.formalityBias;
+  const situationTarget = context.situation.kind === "wedding" ? 4.5
+    : context.situation.kind === "interview" ? 4
+      : ["court_sport", "gym", "running"].includes(context.situation.kind) ? 1
+        : context.situation.kind === "hiking" ? 1.5
+          : context.situation.kind === "lab" ? 2.5
+            : explicit;
+  return Math.max(1, Math.min(5, situationTarget));
+}
+
 export function scoreItemHeuristic(item: WardrobeItem, context: RecommendationContext) {
-  const formalityTarget = clamp01(((context.intent.desiredFormality ?? 3) + context.profile.formalityBias) / 5) * 5;
+  const formalityTarget = situationFormalityTarget(context);
   const formalityFit = 1 - Math.abs(item.formality - formalityTarget) / 4;
   const comfort = item.comfort / 5;
   const warmthFit = bodyCategories.has(item.category) || item.category === "shoes" || item.category === "headwear" || item.category === "scarf"
@@ -285,6 +296,11 @@ function occasionCompatibility(item: WardrobeItem, context: RecommendationContex
   if (/walk|errand|casual|coffee/.test(text)) { desired.add("casual"); desired.add("everyday"); }
   if (/party|wedding|event/.test(text)) { desired.add("event"); desired.add("formal"); }
   if (/travel|flight|airport/.test(text)) desired.add("travel");
+  if (["court_sport", "gym", "running"].includes(context.situation.kind)) { desired.add("sport"); desired.add("active"); }
+  if (context.situation.kind === "hiking") { desired.add("outdoor"); desired.add("casual"); }
+  if (context.situation.kind === "lab") { desired.add("work"); desired.add("practical"); }
+  if (context.situation.kind === "interview") { desired.add("work"); desired.add("formal"); }
+  if (context.situation.kind === "wedding") { desired.add("event"); desired.add("formal"); }
   if (item.occasionTags.some((tag) => desired.has(tag))) return 1;
   if (item.occasionTags.includes("everyday")) return 0.78;
   return 0.65;
@@ -342,7 +358,7 @@ export function scoreCandidate(ids: OutfitItemIds, context: RecommendationContex
   const validation = validateOutfit(ids, context);
   if (!validation.valid) throw new Error(`Cannot score illegal outfit: ${validation.violations.map((entry) => entry.code).join(",")}`);
   const items = Object.values(ids).map((id) => context.wardrobeIndex.get(id)).filter((item): item is WardrobeItem => Boolean(item));
-  const targetFormality = Math.max(1, Math.min(5, (context.intent.desiredFormality ?? 3) + context.profile.formalityBias));
+  const targetFormality = situationFormalityTarget(context);
   const outfitWarmth = outfitThermalPerformance(ids, context);
   const weatherFit = 1 - Math.abs(outfitWarmth - desiredWarmth(context));
   const formalityFit = 1 - Math.abs(mean(items.map((item) => item.formality)) - targetFormality) / 4;
@@ -387,6 +403,7 @@ export function scoreCandidate(ids: OutfitItemIds, context: RecommendationContex
   const hardConstraintChecks = [
     { rule: "core-structure:exactly-one-template", passed: true, itemIds: traceItemIds },
     { rule: `availability:${traceItemIds.length}-items-current`, passed: true, itemIds: traceItemIds },
+    { rule: `situation:${context.situation.kind}`, passed: true, itemIds: traceItemIds },
     ...(context.excludedItemIds.size ? [{ rule: `excluded-items:${context.excludedItemIds.size}`, passed: true, itemIds: [...context.excludedItemIds] }] : []),
     ...(context.excludedCategories.size ? [{ rule: `excluded-categories:${[...context.excludedCategories].join(",")}`, passed: true, itemIds: traceItemIds }] : []),
     ...(context.requiredItemIds.size ? [{ rule: `required-items:${context.requiredItemIds.size}`, passed: true, itemIds: [...context.requiredItemIds] }] : []),

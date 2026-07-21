@@ -98,14 +98,14 @@ export class VoiceSessionCoordinator {
           ...this.snapshot,
           owner,
           status,
-          stage: status === "connecting" ? "token" : status === "error" ? this.snapshot.stage ?? "lifecycle" : null,
+          stage: status === "connecting" ? "token" : status === "recoverable_error" ? this.snapshot.stage ?? "lifecycle" : null,
           generation,
           attemptId,
           retryAt: null,
-          errorCode: status === "error" ? this.snapshot.errorCode ?? "VOICE_RUNTIME_FAILED" : null,
+          errorCode: status === "recoverable_error" ? this.snapshot.errorCode ?? "VOICE_RUNTIME_FAILED" : null,
         });
         if (status === "listening") this.record(active, "ready", "success", { sdkConnectionStatus: "connected" });
-        if (status === "error" && !this.connectPromise) void this.closeRuntimeFailure(active);
+        if (status === "recoverable_error" && !this.connectPromise) void this.closeRuntimeFailure(active);
       }),
       adapter.onTranscript((transcript) => {
         if (!this.isActive(active)) return;
@@ -115,7 +115,7 @@ export class VoiceSessionCoordinator {
       }),
       adapter.onFailure((failure) => {
         if (!this.isActive(active)) return;
-        this.publish({ ...this.snapshot, status: "error", stage: failure.stage, errorCode: failure.code });
+        this.publish({ ...this.snapshot, status: "recoverable_error", stage: failure.stage, errorCode: failure.code });
         this.record(active, failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, zodIssuePaths: failure.zodIssuePaths, httpStatus: failure.httpStatus, sdkConnectionStatus: "disconnected" });
         void this.closeRuntimeFailure(active);
       }),
@@ -142,7 +142,7 @@ export class VoiceSessionCoordinator {
         this.publish({
           ...this.snapshot,
           owner,
-          status: retryAt ? "rate_limited" : "error",
+          status: retryAt ? "rate_limited" : "recoverable_error",
           stage: failure.stage,
           retryAt,
           errorCode: failure.code,
@@ -172,6 +172,18 @@ export class VoiceSessionCoordinator {
 
   mute(owner: VoiceOwner, muted: boolean) {
     if (this.active?.owner === owner) this.active.adapter.mute(muted);
+  }
+
+  commitTurn(owner: VoiceOwner) {
+    if (this.active?.owner !== owner || this.snapshot.status !== "listening") return false;
+    this.active.adapter.commitTurn?.();
+    return true;
+  }
+
+  interruptAndListen(owner: VoiceOwner) {
+    if (this.active?.owner !== owner || this.snapshot.status !== "speaking") return false;
+    this.active.adapter.interruptAndListen?.();
+    return true;
   }
 
   submitDemoTurn(owner: VoiceOwner) {

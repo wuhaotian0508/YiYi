@@ -1,5 +1,4 @@
 import OpenAI from "openai";
-import sharp from "sharp";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { DailyIntentSchema, OutfitRankingResultSchema, WeatherContextSchema } from "@/domain/schemas";
@@ -8,6 +7,7 @@ import { apiError, noStoreJson } from "@/lib/api/responses";
 import { providerRoutesAllowed, takeRateLimit } from "@/lib/api/rate-limit";
 import { logApiDiagnostic, responseRequestId, responseUsage, safeErrorMetadata, type ApiDiagnostic } from "@/lib/api/diagnostics";
 import { openAIClientOptions, providerTimeoutMs } from "@/lib/api/provider-policy";
+import { isImageRuntimeUnavailable, loadSharp } from "@/lib/images/sharp-runtime";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -52,7 +52,7 @@ function boardMime(dataUrl: string): "image/webp" | "image/png" {
   return dataUrl.startsWith("data:image/png;base64,") ? "image/png" : "image/webp";
 }
 
-async function hasValidBoardMetadata(candidate: z.infer<typeof RankRequestSchema>["candidates"][number]) {
+async function hasValidBoardMetadata(candidate: z.infer<typeof RankRequestSchema>["candidates"][number], sharp: Awaited<ReturnType<typeof loadSharp>>) {
   const match = /^data:(image\/(?:webp|png));base64,([A-Za-z0-9+/]*={0,2})$/.exec(candidate.boardDataUrl);
   if (!match) return false;
   const input = Buffer.from(match[2], "base64");
@@ -121,7 +121,8 @@ export async function POST(request: Request) {
     const parsed = RankRequestSchema.safeParse(body);
     if (!parsed.success) return apiError(requestId, 400, "INVALID_RANK_REQUEST", "The outfit candidates were invalid.");
     const input = parsed.data;
-    const boardMetadata = await Promise.all(input.candidates.map(hasValidBoardMetadata));
+    const sharp = await loadSharp();
+    const boardMetadata = await Promise.all(input.candidates.map((candidate) => hasValidBoardMetadata(candidate, sharp)));
     if (boardMetadata.some((valid) => !valid)) return apiError(requestId, 400, "INVALID_RANK_REQUEST", "The outfit candidate images were invalid.");
     requestId = input.requestId;
     correlation = input.correlation ?? {};
@@ -176,6 +177,10 @@ export async function POST(request: Request) {
     return noStoreJson({ requestId, ranking, source: "live", model: actualModel, diagnostics: { requestId, boardBytes, candidateCount: input.candidates.length } });
   } catch (error) {
     const metadata = safeErrorMetadata(error);
+    if (isImageRuntimeUnavailable(error)) {
+      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "application", outcome: "error", ...metadata, ...correlation, durationMs: 0, errorCode: "IMAGE_RUNTIME_UNAVAILABLE", providerStage: "image-runtime" });
+      return apiError(requestId, 503, "IMAGE_RUNTIME_UNAVAILABLE", "Visual ranking is temporarily unavailable.", false);
+    }
     logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "application", outcome: "error", ...metadata, ...correlation, durationMs: 0, errorCode: "RANK_FAILED" });
     return apiError(requestId, 500, "RANK_FAILED", "I’ve put together a simpler option for now.", true);
   }

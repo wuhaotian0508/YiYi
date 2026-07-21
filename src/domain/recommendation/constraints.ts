@@ -3,6 +3,7 @@ import { activeLongTermPreferenceSignals } from "@/domain/preferences/profile-mu
 import { matchesPreferenceSignal, outfitMatchesCombinationSignal } from "@/domain/preferences/preference-matching";
 import { RecommendationError, type RecommendationContext } from "@/domain/recommendation/context";
 import { colorIds } from "@/domain/taxonomy";
+import { situationItemViolation } from "@/domain/recommendation/situation";
 
 export type ConstraintViolationCode =
   | "INVALID_STRUCTURE"
@@ -16,7 +17,9 @@ export type ConstraintViolationCode =
   | "HARD_AVOID"
   | "RAIN_UNSAFE"
   | "WALKING_UNSAFE"
-  | "PRESERVED_SLOT_CHANGED";
+  | "PRESERVED_SLOT_CHANGED"
+  | "REQUIRED_EMPTY_SLOT_OCCUPIED"
+  | "SITUATION_UNSAFE";
 
 export type ConstraintViolation = {
   code: ConstraintViolationCode;
@@ -133,9 +136,12 @@ export function validateRequiredAnchors(context: RecommendationContext) {
     if (context.excludedCategories.has(item.category)) throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `Required item “${item.subtype}” belongs to an excluded category.`, [id]);
     const avoid = hardAvoidReason(item, context);
     if (avoid) throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `Required item “${item.subtype}” conflicts with “${avoid}”.`, [id]);
-    if (context.weather?.expectedRain && item.weatherTags.includes("dry_only")) throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `Required item “${item.subtype}” is dry-only in expected rain.`, [id]);
+    if ((context.weather?.expectedRain || context.situation.kind === "rain_commute") && item.weatherTags.includes("dry_only")) throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `Required item “${item.subtype}” is dry-only in expected rain.`, [id]);
     if (context.intent.walkingIntensity >= 5 && item.category === "shoes" && item.comfort < 3) throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `Required shoes “${item.subtype}” are unsuitable for extended walking.`, [id]);
     const slot = slotForItem(item);
+    if (context.requiredEmptySlots.has(slot)) throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `The ${slot} slot cannot be both required and empty.`, [id]);
+    const situationViolation = situationItemViolation(item, slot, context.situation);
+    if (situationViolation) throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `Required item “${item.subtype}” is unsafe for this activity.`, [id, situationViolation]);
     const existing = slots.get(slot);
     if (existing && existing !== id) throw new RecommendationError("CONFLICTING_REQUIRED_ITEMS", `Two required items compete for the ${slot} slot.`, [existing, id]);
     slots.set(slot, id);
@@ -169,7 +175,10 @@ export function validateOutfit(ids: OutfitItemIds, context: RecommendationContex
     if (context.excludedCategories.has(item.category)) violations.push({ code: "CATEGORY_EXCLUDED", message: `${item.category} was explicitly excluded.`, itemIds: [id] });
     const avoid = hardAvoidReason(item, context);
     if (avoid) violations.push({ code: "HARD_AVOID", message: `${item.subtype} conflicts with “${avoid}”.`, itemIds: [id] });
-    if (context.weather?.expectedRain && item.weatherTags.includes("dry_only")) violations.push({ code: "RAIN_UNSAFE", message: `${item.subtype} is marked dry-only.`, itemIds: [id] });
+    if ((context.weather?.expectedRain || context.situation.kind === "rain_commute") && item.weatherTags.includes("dry_only")) violations.push({ code: "RAIN_UNSAFE", message: `${item.subtype} is marked dry-only.`, itemIds: [id] });
+    if (context.requiredEmptySlots.has(slot)) violations.push({ code: "REQUIRED_EMPTY_SLOT_OCCUPIED", message: `${slot} must remain empty for this request.`, itemIds: [id], slots: [slot] });
+    const situationViolation = situationItemViolation(item, slot, context.situation);
+    if (situationViolation) violations.push({ code: "SITUATION_UNSAFE", message: `${item.subtype} conflicts with the ${context.situation.kind} situation policy.`, itemIds: [id], slots: [slot] });
   }
 
   for (const id of context.requiredItemIds) {
@@ -203,7 +212,9 @@ export function validatePartial(ids: Partial<OutfitItemIds>, context: Recommenda
     if (context.excludedItemIds.has(id)) violations.push({ code: "ITEM_EXCLUDED", message: "A partial candidate contains an explicitly excluded item.", itemIds: [id] });
     if (context.excludedCategories.has(item.category)) violations.push({ code: "CATEGORY_EXCLUDED", message: "A partial candidate contains an excluded category.", itemIds: [id] });
     if (hardAvoidReason(item, context)) violations.push({ code: "HARD_AVOID", message: "A partial candidate conflicts with a compiled hard avoid.", itemIds: [id] });
-    if (context.weather?.expectedRain && item.weatherTags.includes("dry_only")) violations.push({ code: "RAIN_UNSAFE", message: "A partial candidate is dry-only in expected rain.", itemIds: [id] });
+    if ((context.weather?.expectedRain || context.situation.kind === "rain_commute") && item.weatherTags.includes("dry_only")) violations.push({ code: "RAIN_UNSAFE", message: "A partial candidate is dry-only in expected rain.", itemIds: [id] });
+    if (context.requiredEmptySlots.has(slot)) violations.push({ code: "REQUIRED_EMPTY_SLOT_OCCUPIED", message: `${slot} must remain empty.`, itemIds: [id], slots: [slot] });
+    if (situationItemViolation(item, slot, context.situation)) violations.push({ code: "SITUATION_UNSAFE", message: "A partial candidate conflicts with the activity safety policy.", itemIds: [id], slots: [slot] });
   }
   for (const id of context.requiredItemIds) {
     if (values.includes(id)) continue;

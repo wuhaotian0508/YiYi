@@ -1,7 +1,7 @@
 export const copy = {
   permission: {
     title: "YiYi is built around live voice.",
-    body: "Microphone access is required to continue.",
+    body: "Microphone access is required for live voice. YiYi also uses approximate location only to check today’s weather.",
     denied: "YiYi needs microphone access to understand your day and adjust your outfit naturally.",
     allow: "Allow Microphone",
     settings: "Open Settings",

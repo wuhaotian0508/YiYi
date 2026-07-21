@@ -52,7 +52,7 @@ export async function POST(request: Request) {
         model,
         output_modalities: ["audio"],
         audio: {
-          input: { noise_reduction: { type: "near_field" }, turn_detection: { type: "semantic_vad", eagerness: "high", create_response: true, interrupt_response: true } },
+          input: { noise_reduction: { type: "near_field" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: true, interrupt_response: false } },
           output: { voice },
         },
         max_output_tokens: 220,

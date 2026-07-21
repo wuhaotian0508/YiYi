@@ -1,11 +1,11 @@
 import OpenAI from "openai";
-import sharp from "sharp";
 import { zodTextFormat } from "openai/helpers/zod";
 import { WardrobeAnalysisProviderSchema, WardrobeAnalysisSchema, type WardrobeAnalysis } from "@/domain/schemas";
 import { apiError, noStoreJson } from "@/lib/api/responses";
 import { providerRoutesAllowed, takeRateLimit } from "@/lib/api/rate-limit";
 import { logApiDiagnostic, responseUsage, safeErrorMetadata } from "@/lib/api/diagnostics";
 import { openAIClientOptions, providerTimeoutMs } from "@/lib/api/provider-policy";
+import { isImageRuntimeUnavailable, loadSharp } from "@/lib/images/sharp-runtime";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -33,7 +33,7 @@ function detectedImage(bytes: Uint8Array): DetectedImage | null {
   return null;
 }
 
-async function validImageGeometry(input: Buffer) {
+async function validImageGeometry(input: Buffer, sharp: Awaited<ReturnType<typeof loadSharp>>) {
   try {
     const metadata = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS, failOn: "warning" }).metadata();
     const width = metadata.width ?? 0;
@@ -67,7 +67,7 @@ async function readResponseBodyWithinLimit(response: Response, maximumBytes: num
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total);
 }
 
-async function validateBackgroundRemovalOutput(input: Buffer) {
+async function validateBackgroundRemovalOutput(input: Buffer, sharp: Awaited<ReturnType<typeof loadSharp>>) {
   const metadata = await sharp(input, { limitInputPixels: MAX_BACKGROUND_REMOVAL_PIXELS, failOn: "warning" }).metadata();
   const width = metadata.width ?? 0;
   const height = metadata.height ?? 0;
@@ -83,6 +83,16 @@ function mockAnalysis(): WardrobeAnalysis {
     occasionTags: ["everyday"], weatherTags: ["mild"], aiConfidence: { category: .96, colors: .94, materials: .61, pattern: .96, fit: .83, style: .74, formality: .78, warmth: .7, comfort: .62 },
     featureProvenance: { category: "terra", colors: "terra", materials: "terra", pattern: "terra", fit: "terra", style: "terra", formality: "terra", warmth: "terra", comfort: "terra" },
     internalDescription: "Brown relaxed cotton-blend outerwear", userEditedFields: [],
+  });
+}
+
+function manualReviewAnalysis(): WardrobeAnalysis {
+  return WardrobeAnalysisSchema.parse({
+    category: "other_accessory", subtype: "Unreviewed item", primaryColor: "multicolor", secondaryColors: [], materials: ["Unknown"],
+    pattern: "unknown", fit: "unknown", warmth: 3, formality: 3, comfort: 3, styleTags: [], occasionTags: [], weatherTags: [], metal: "unknown",
+    aiConfidence: { category: 0, colors: 0, materials: 0, pattern: 0, fit: 0, style: 0, formality: 0, warmth: 0, comfort: 0 },
+    featureProvenance: { category: "derived", colors: "derived", materials: "derived", pattern: "derived", fit: "derived", style: "derived", formality: "derived", warmth: "derived", comfort: "derived" },
+    internalDescription: "Analysis unavailable; user review required", userEditedFields: [],
   });
 }
 
@@ -107,11 +117,12 @@ export async function POST(request: Request) {
     const input = Buffer.from(await file.arrayBuffer());
     const detected = detectedImage(input.subarray(0, 16));
     if (!detected) return apiError(requestId, 415, "UNSUPPORTED_IMAGE", "Use a JPEG, PNG, WebP, or HEIC image.");
-    if (!(await validImageGeometry(input))) return apiError(requestId, 415, "INVALID_IMAGE", "Choose a valid single-frame photo.");
+    const sharp = await loadSharp();
+    if (!(await validImageGeometry(input, sharp))) return apiError(requestId, 415, "INVALID_IMAGE", "Choose a valid single-frame photo.");
 
     if (process.env.AI_MODE !== "live") {
       const normalized = await sharp(input).rotate().resize(1024, 1024, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 88 }).toBuffer();
-      return noStoreJson({ requestId, cutoutDataUrl: `data:image/webp;base64,${normalized.toString("base64")}`, analysis: mockAnalysis() });
+      return noStoreJson({ requestId, cutoutDataUrl: `data:image/webp;base64,${normalized.toString("base64")}`, analysis: mockAnalysis(), analysisStatus: "complete", source: { cutout: "mock", analysis: "mock" }, diagnostics: { photoroomMs: null, analysisMs: null, analysisErrorCode: null } });
     }
 
     if (!process.env.PHOTOROOM_API_KEY || !process.env.OPENAI_API_KEY) return apiError(requestId, 503, "NOT_CONFIGURED", "Image processing is not configured.", true);
@@ -139,7 +150,7 @@ export async function POST(request: Request) {
       const providerContentType = cutoutResponse.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
       if (providerContentType !== "image/webp") throw new Error("unexpected provider content type");
       const removed = await readResponseBodyWithinLimit(cutoutResponse, MAX_BACKGROUND_REMOVAL_BYTES);
-      await validateBackgroundRemovalOutput(removed);
+      await validateBackgroundRemovalOutput(removed, sharp);
       const fitted = await sharp(removed, { limitInputPixels: MAX_BACKGROUND_REMOVAL_PIXELS, failOn: "warning" }).trim().resize(860, 860, { fit: "inside", withoutEnlargement: true }).toBuffer();
       normalized = await sharp(fitted, { limitInputPixels: MAX_BACKGROUND_REMOVAL_PIXELS, failOn: "warning" }).resize(1024, 1024, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 90, alphaQuality: 100 }).toBuffer();
       if (normalized.byteLength > MAX_NORMALIZED_OUTPUT_BYTES) throw new Error("normalized output too large");
@@ -150,7 +161,8 @@ export async function POST(request: Request) {
       logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", ...metadata, httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt, errorCode: "INVALID_BACKGROUND_REMOVAL_OUTPUT" });
       return apiError(requestId, 502, "INVALID_BACKGROUND_REMOVAL_OUTPUT", "We couldn’t process this item. Please try again.", true);
     }
-    logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "success", httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt });
+    const photoroomMs = Date.now() - photoroomStartedAt;
+    logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "success", httpStatus: cutoutResponse.status, durationMs: photoroomMs, providerStage: "background-removal" });
     const imageUrl = `data:image/webp;base64,${normalized.toString("base64")}`;
     const openai = new OpenAI(openAIClientOptions(process.env.OPENAI_API_KEY));
     const model = process.env.OPENAI_ITEM_MODEL ?? "gpt-5.6-terra";
@@ -166,20 +178,26 @@ export async function POST(request: Request) {
         text: { format: zodTextFormat(WardrobeAnalysisProviderSchema, "wardrobe_analysis") },
       }, { signal: AbortSignal.timeout(providerTimeoutMs.itemAnalysis) }).catch((error: unknown) => {
       const metadata = safeErrorMetadata(error);
-      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", ...metadata, durationMs: Date.now() - openaiStartedAt, errorCode: "ITEM_ANALYSIS_FAILED" });
+      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", ...metadata, durationMs: Date.now() - openaiStartedAt, errorCode: "ITEM_ANALYSIS_FAILED", providerStage: "item-analysis" });
       return null;
     });
-    if (!result) return apiError(requestId, 502, "ITEM_ANALYSIS_FAILED", "We couldn’t understand this item. Please try again.", true);
+    if (!result) return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis: manualReviewAnalysis(), analysisStatus: "needs-review", source: { cutout: "photoroom", analysis: "manual-review" }, diagnostics: { photoroomMs, analysisMs: Date.now() - openaiStartedAt, analysisErrorCode: "ITEM_ANALYSIS_FAILED" } });
     const parsedAnalysis = WardrobeAnalysisSchema.safeParse(result.output_parsed);
     if (!parsedAnalysis.success) {
-      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", httpStatus: 200, durationMs: Date.now() - openaiStartedAt, errorCode: "INVALID_ITEM_ANALYSIS_OUTPUT", errorType: "InvalidProviderOutput", usage: responseUsage(result) });
-      return apiError(requestId, 502, "INVALID_ITEM_ANALYSIS_OUTPUT", "We couldn’t understand this item. Please try again.", true);
+      const analysisMs = Date.now() - openaiStartedAt;
+      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", httpStatus: 200, durationMs: analysisMs, errorCode: "INVALID_ITEM_ANALYSIS_OUTPUT", errorType: "InvalidProviderOutput", usage: responseUsage(result), providerStage: "item-analysis" });
+      return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis: manualReviewAnalysis(), analysisStatus: "needs-review", source: { cutout: "photoroom", analysis: "manual-review" }, diagnostics: { photoroomMs, analysisMs, analysisErrorCode: "INVALID_ITEM_ANALYSIS_OUTPUT" } });
     }
     const analysis = parsedAnalysis.data;
-    logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "success", httpStatus: 200, durationMs: Date.now() - openaiStartedAt, usage: responseUsage(result) });
-    return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis });
+    const analysisMs = Date.now() - openaiStartedAt;
+    logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "success", httpStatus: 200, durationMs: analysisMs, usage: responseUsage(result), providerStage: "item-analysis" });
+    return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis, analysisStatus: "complete", source: { cutout: "photoroom", analysis: "terra" }, diagnostics: { photoroomMs, analysisMs, analysisErrorCode: null } });
   } catch (error) {
     const metadata = safeErrorMetadata(error);
+    if (isImageRuntimeUnavailable(error)) {
+      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "application", outcome: "error", ...metadata, durationMs: 0, errorCode: "IMAGE_RUNTIME_UNAVAILABLE", providerStage: "image-runtime" });
+      return apiError(requestId, 503, "IMAGE_RUNTIME_UNAVAILABLE", "Image processing is temporarily unavailable.", false);
+    }
     logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "application", outcome: "error", ...metadata, durationMs: 0, errorCode: "PROCESSING_FAILED" });
     return apiError(requestId, 500, "PROCESSING_FAILED", "We couldn’t process this item. Please try again.", true);
   }

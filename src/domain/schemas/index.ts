@@ -331,6 +331,7 @@ export const IntentDeltaSchema = z.object({
   operation: z.enum(["targeted_revision", "global_revision", "random_new_outfit", "undo", "confirm"]),
   targetSlots: z.array(OutfitSlotSchema).max(3),
   preserveSlots: z.array(OutfitSlotSchema).max(8),
+  emptySlots: z.array(OutfitSlotSchema).max(4).optional(),
   requiredItemIds: z.array(z.string().uuid()).max(12),
   excludedItemIds: z.array(z.string().uuid()).max(24),
   excludedCategories: z.array(ClothingCategorySchema).max(clothingCategories.length),
