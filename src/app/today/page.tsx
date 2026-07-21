@@ -19,10 +19,11 @@ import { recommendationPreferenceSummary } from "@/domain/preferences/summary";
 import { assertDisplayedOutfitLegal, runRecommendationDecision, validateRestoredOutfit } from "@/domain/recommendation/engine";
 import { createRecommendationContext, RecommendationError } from "@/domain/recommendation/context";
 import { outfitMutationProof, voiceActionToIntentDelta } from "@/domain/recommendation/voice-action-router";
+import { buildDailyIntentFromVoiceRequest, emptyDailyIntent } from "@/domain/recommendation/voice-intent";
 import { IntentDeltaSchema, type DailyIntent, type IntentDelta, type Outfit, type OutfitSlot, type WardrobeItem, type WeatherContext } from "@/domain/schemas";
 import { configureSounds, playSound, unlockSounds } from "@/lib/audio/sound-system";
 import { calmSpring } from "@/lib/motion/tokens";
-import { MockVoiceSessionAdapter, OpenAIRealtimeVoiceAdapter, resolveAvailabilityItemId, type VoiceToolHandlers } from "@/lib/realtime/voice-session";
+import { MockVoiceSessionAdapter, OpenAIRealtimeVoiceAdapter, resolveAvailabilityItemId, type VoiceToolHandlers, type VoiceTurnAction } from "@/lib/realtime/voice-session";
 import { voiceSessionCoordinator, voiceSessionServerSnapshot, type VoiceLifecycleStatus, type VoiceSessionSnapshot } from "@/lib/realtime/voice-session-coordinator";
 import { persistPreferenceDelta } from "@/lib/preferences/profile-storage";
 import { rankOutfits } from "@/lib/recommendation/client-ranking";
@@ -30,7 +31,6 @@ import { RecommendationOperationController, runCommitPhase, type OperationToken 
 import { commitOutfitMutation, confirmOutfitMutation, resetInvalidOutfitSession, undoOutfitMutation, updateItemAvailabilityMutation } from "@/lib/recommendation/session-mutations";
 import { db, getSoundEnabled } from "@/lib/storage/db";
 import { configuredWeatherMode, fetchConfiguredWeather, getStoredWeatherState, resolveWeatherForSession, usableCachedWeather, type WeatherSource } from "@/lib/weather/client";
-import { demoIntent } from "@/mocks/wardrobe";
 
 type Phase = "idle" | "connecting" | "listening" | "understanding" | "generating" | "presenting" | "revising" | "paused" | "confirmed" | "error";
 type IntentTag = { id: string; kind: "activity" | "aesthetic" | "excluded"; index: number; label: string };
@@ -48,16 +48,16 @@ function intentTags(intent: DailyIntent): IntentTag[] {
   ];
 }
 
-function voiceVisualState(phase: Phase, voiceState: VoiceLifecycleStatus): VoiceVisualState {
+function voiceVisualState(phase: Phase, voiceState: VoiceLifecycleStatus, action: VoiceTurnAction["action"] | null): VoiceVisualState {
   if (voiceState === "rate_limited") return "error";
   if (voiceState === "recoverable_error") return "recoverable_error";
-  if (phase === "revising") return "revising";
+  if (phase === "revising" && (action === "revise" || action === "remove" || action === "random" || action === "set_availability")) return "revising";
   if (phase === "generating") return "tool_running";
   if (phase === "understanding") return "understanding";
   return voiceState;
 }
 
-function voiceStatus(phase: Phase, voice: VoiceSessionSnapshot) {
+function voiceStatus(phase: Phase, voice: VoiceSessionSnapshot, action: VoiceTurnAction["action"] | null) {
   if (voice.status === "rate_limited") return "Too many starts · Try again after the cooldown";
   if (voice.status === "recoverable_error" || phase === "error") {
     if (voice.stage === "permission") return "Microphone access is needed · Tap to retry";
@@ -67,6 +67,12 @@ function voiceStatus(phase: Phase, voice: VoiceSessionSnapshot) {
   }
   if (voice.status === "connecting") return "Connecting…";
   if (voice.status === "committing") return "Finishing your turn…";
+  if (action === "confirm") return "Confirming your outfit…";
+  if (action === "undo") return "Restoring the previous outfit…";
+  if (action === "random") return "Choosing another legal outfit…";
+  if (action === "set_availability") return "Updating availability…";
+  if (action === "no_change") return "Listening when you’re ready…";
+  if (action === "revise" || action === "remove") return "Revising…";
   if (voice.status === "tool_running") return "Choosing…";
   if (voice.status === "revising") return "Revising…";
   if (phase === "understanding") return "Understanding…";
@@ -89,7 +95,7 @@ export function TodayPage() {
   const transcript = voiceSnapshot.owner === "today" ? voiceSnapshot.latestUserTranscript?.text ?? "" : "";
   const [hydrated, setHydrated] = useState(false);
   const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([]);
-  const [intent, setIntent] = useState<DailyIntent>(demoIntent);
+  const [intent, setIntent] = useState<DailyIntent>(() => emptyDailyIntent());
   const [current, setCurrent] = useState<Outfit | null>(null);
   const [reason, setReason] = useState<string>(copy.outfit.reason);
   const [history, setHistory] = useState<Outfit[]>([]);
@@ -98,7 +104,9 @@ export function TodayPage() {
   const [tagDraft, setTagDraft] = useState("");
   const [weather, setWeather] = useState<WeatherContext | null>(null);
   const [weatherSource, setWeatherSource] = useState<WeatherSource | null>(null);
+  const [weatherOpen, setWeatherOpen] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+  const [activeVoiceAction, setActiveVoiceAction] = useState<VoiceTurnAction["action"] | null>(null);
   const operationControllerRef = useRef(new RecommendationOperationController());
   const sessionIdRef = useRef<string | null>(null);
   const versionIdRef = useRef<string | null>(null);
@@ -130,20 +138,31 @@ export function TodayPage() {
         getStoredWeatherState(),
       ]);
       const session = sessions.sort((a, b) => b.updatedAt - a.updatedAt)[0];
-      const freshResult = await fetchConfiguredWeather();
-      const freshWeather = freshResult?.weather ?? null;
       if (cancelled) return;
       const cachedWeather = usableCachedWeather(cachedState);
-      const resolvedWeather = resolveWeatherForSession(freshWeather, session?.weather, cachedWeather);
-      const resolvedSource = freshResult?.source
-        ?? (cachedWeather === resolvedWeather ? cachedState.source : configuredWeatherMode() === "fixed-demo" ? "fixed-demo" : resolvedWeather ? "open-meteo" : null);
+      const resolvedWeather = resolveWeatherForSession(null, session?.weather, cachedWeather);
+      const resolvedSource = cachedWeather === resolvedWeather
+        ? cachedState.source
+        : configuredWeatherMode() === "fixed-demo" && resolvedWeather
+          ? "fixed-demo"
+          : resolvedWeather ? "open-meteo" : null;
       setWeather(resolvedWeather);
       setWeatherSource(resolvedSource);
       weatherRef.current = resolvedWeather;
-      if (freshWeather && session && session.weather?.sourceTimestamp !== freshWeather.sourceTimestamp) await db.dailySessions.update(session.id, { weather: freshWeather });
       setWardrobe(items);
       wardrobeRef.current = items;
       setHydrated(true);
+      // Local wardrobe/session/outfit hydration is the critical path. Location
+      // permission and its timeout refresh weather independently afterward.
+      void fetchConfiguredWeather().then(async (freshResult) => {
+        if (cancelled || !freshResult?.weather) return;
+        setWeather(freshResult.weather);
+        setWeatherSource(freshResult.source);
+        weatherRef.current = freshResult.weather;
+        if (session && session.weather?.sourceTimestamp !== freshResult.weather.sourceTimestamp) {
+          await db.dailySessions.update(session.id, { weather: freshResult.weather });
+        }
+      }).catch(() => undefined);
       if (session?.currentVersionId) {
         const version = await db.outfitVersions.get(session.currentVersionId);
         if (!cancelled && version) {
@@ -223,7 +242,14 @@ export function TodayPage() {
     const key = `${voiceSnapshot.generation}:${nextTranscript.text}`;
     if (handledTranscriptRef.current === key) return;
     handledTranscriptRef.current = key;
-    void runRecommendation(demoIntent, nextTranscript.text);
+    const nextIntent = buildDailyIntentFromVoiceRequest({
+      userRequest: nextTranscript.text,
+      activityPhrases: [],
+      desiredFeelings: [],
+      exclusions: [],
+      wardrobeAnchors: [],
+    }, wardrobeRef.current);
+    void runRecommendation(nextIntent, nextTranscript.text);
   // runRecommendation reads current refs and is intentionally triggered only by a new final mock transcript.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceSnapshot.generation, voiceSnapshot.latestUserTranscript, voiceSnapshot.owner]);
@@ -443,11 +469,17 @@ export function TodayPage() {
     const currentVoice = () => voiceSessionCoordinator.isCurrent("today", voiceGeneration);
     const staleVoice = () => ({ success: false, summary: "That voice session has already ended." });
     return {
-      requestRecommendation: (nextIntent) => currentVoice() ? executeDecision({ operation: "initial", nextIntent, utterance: nextIntent.freeformSummary, voiceGeneration }) : Promise.resolve(staleVoice()),
+      requestRecommendation: (request) => {
+        if (!currentVoice()) return Promise.resolve(staleVoice());
+        const nextIntent = buildDailyIntentFromVoiceRequest(request, wardrobeRef.current);
+        return executeDecision({ operation: "initial", nextIntent, utterance: request.userRequest, voiceGeneration });
+      },
       handleTurn: async (input) => {
         if (!currentVoice()) return staleVoice();
+        setActiveVoiceAction(input.action);
+        try {
         if (input.action === "no_change") return { success: true, summary: "I’m listening when you’re ready.", changedSlots: [], removedItemIds: [], addedItemIds: [], outfitVersionId: versionIdRef.current ?? undefined };
-        if (input.action === "confirm") return confirmCurrent(voiceGeneration);
+        if (input.action === "confirm") return await confirmCurrent(voiceGeneration);
         if (input.action === "undo") {
           const before = currentRef.current;
           const success = await undo(voiceGeneration);
@@ -456,7 +488,7 @@ export function TodayPage() {
             ? { success: true, summary: "I restored the previous outfit.", ...outfitMutationProof(before, after), outfitVersionId: versionIdRef.current ?? undefined }
             : { success: false, summary: currentVoice() ? "There is no previous outfit to restore." : "That voice session has already ended.", errorCode: "UNDO_UNAVAILABLE", failureStage: "persistence" };
         }
-        if (input.action === "random") return executeDecision({ operation: "random_new_outfit", delta: randomDelta(), utterance: input.userRequest, voiceGeneration });
+        if (input.action === "random") return await executeDecision({ operation: "random_new_outfit", delta: randomDelta(), utterance: input.userRequest, voiceGeneration });
         if (input.action === "save_preference") return { success: false, summary: "Please add lasting preferences in Fine-tune so you can review them.", errorCode: "PREFERENCE_REVIEW_REQUIRED", failureStage: "tool" };
         if (input.action === "set_availability") {
           if (!input.availability) return { success: false, summary: "Tell me whether that item is available, in laundry, or unavailable.", errorCode: "AVAILABILITY_REQUIRED", failureStage: "tool" };
@@ -474,7 +506,7 @@ export function TodayPage() {
             if (!items) { operationControllerRef.current.finish(token); return { success: false, summary: "I could not find that wardrobe item." }; }
             if (currentRef.current && Object.values(currentRef.current.itemIds).includes(itemId) && input.availability !== "available") {
               const delta = IntentDeltaSchema.parse({ operation: "global_revision", targetSlots: [], preserveSlots: [], emptySlots: [], requiredItemIds: [], excludedItemIds: [itemId], excludedCategories: [], adjustments: zeroAdjustments, desiredStyleTags: [], undesiredStyleTags: [], rawUtterance: input.userRequest, confidence: 1, ambiguity: [] });
-              return executeDecision({ operation: "global_revision", delta, utterance: delta.rawUtterance, operationToken: token, clearInvalidCurrentOnFailure: true });
+              return await executeDecision({ operation: "global_revision", delta, utterance: delta.rawUtterance, operationToken: token, clearInvalidCurrentOnFailure: true });
             }
             operationControllerRef.current.enterPublish(token);
             setWardrobe(items);
@@ -493,7 +525,10 @@ export function TodayPage() {
         if (delta.emptySlots?.length && delta.emptySlots.every((slot) => !outfit.itemIds[slot])) {
           return { success: true, summary: "That item is already out of this outfit.", changedSlots: [], removedItemIds: [], addedItemIds: [], outfitVersionId: versionIdRef.current ?? undefined };
         }
-        return executeDecision({ operation: delta.operation === "targeted_revision" ? "targeted_revision" : "global_revision", delta, utterance: input.userRequest, voiceGeneration });
+        return await executeDecision({ operation: delta.operation === "targeted_revision" ? "targeted_revision" : "global_revision", delta, utterance: input.userRequest, voiceGeneration });
+        } finally {
+          if (currentVoice()) setActiveVoiceAction(null);
+        }
       },
       savePreference: async (input) => {
         if (!currentVoice()) return staleVoice();
@@ -548,8 +583,8 @@ export function TodayPage() {
 
   const tags = intentTags(intent);
   const activeVoice = voiceSnapshot.owner === "today" && ["connecting", "listening", "committing", "understanding", "tool_running", "revising", "speaking", "interrupted"].includes(voiceSnapshot.status);
-  const visualState = voiceVisualState(phase, voiceSnapshot.status);
-  const status = voiceStatus(phase, voiceSnapshot);
+  const visualState = voiceVisualState(phase, voiceSnapshot.status, activeVoiceAction);
+  const status = voiceStatus(phase, voiceSnapshot, activeVoiceAction);
   const isMock = process.env.NEXT_PUBLIC_VOICE_MODE !== "live";
   return (
     <main className="phone-page today-page pager-page">
@@ -578,9 +613,12 @@ export function TodayPage() {
       <SwiperSlide><section className="pager-slide" aria-label="Today page" aria-hidden={activePage !== 0} inert={activePage !== 0 ? true : undefined}><div className="page-column">
         <header className="today-topbar">
           <button className="today-nav-link" type="button" onClick={() => pagerRef.current?.slideTo(1)} aria-label="Open wardrobe"><Shirt size={18} /><span>Wardrobe</span></button>
-          <div className="weather-pill">{weather ? `${weather.summary}${weatherSource === "fixed-demo" ? " · Demo" : ""}` : "Weather unavailable"}</div>
+          <button className="weather-pill" type="button" disabled={!weather} aria-expanded={weatherOpen} aria-controls="today-weather-panel" onClick={() => setWeatherOpen((open) => !open)}>
+            {weather ? `${temperatureLabel(weather.currentTemperatureC ?? weather.minApparentTempC)} · ${weather.summary}${weatherSource === "fixed-demo" ? " · Demo" : ""}` : "Weather unavailable"}
+          </button>
           <Link className="icon-button" href="/settings" aria-label="Open settings"><Settings size={20} /></Link>
         </header>
+        <AnimatePresence>{weatherOpen && weather && <WeatherPanel weather={weather} source={weatherSource} onClose={() => setWeatherOpen(false)} />}</AnimatePresence>
         <div className="today-stage">
           <AnimatePresence initial={false} mode="popLayout">
             {phase === "idle" && <Idle key="idle" hydrated={hydrated} recoveryMessage={recoveryMessage} />}
@@ -617,7 +655,25 @@ function MotionSection({ children, className = "" }: { children: React.ReactNode
 }
 
 function Idle({ hydrated, recoveryMessage }: { hydrated: boolean; recoveryMessage: string | null }) {
-  return <MotionSection className="today-content today-idle"><div className="today-morning-mark"><VoiceCore state="idle" disabled /><span>{hydrated ? "Ready for your day" : "Opening your wardrobe…"}</span></div><div className="today-idle-copy"><h1>{copy.today.prompt}</h1><p>{recoveryMessage ?? "Describe where you’re going, how you want to feel, and what the day needs."}</p><span>“{copy.today.example}”</span></div><div className="dock-spacer" /></MotionSection>;
+  return <MotionSection className="today-content today-idle"><div className="today-morning-mark"><span>{hydrated ? "Ready for your day" : "Opening your wardrobe…"}</span></div><div className="today-idle-copy"><h1>{copy.today.prompt}</h1><p>{recoveryMessage ?? "Describe where you’re going, how you want to feel, and what the day needs."}</p><span>“{copy.today.example}”</span></div><div className="dock-spacer" /></MotionSection>;
+}
+
+function temperatureLabel(celsius: number) {
+  return `${Math.round((celsius * 9) / 5 + 32)}°`;
+}
+
+function WeatherPanel({ weather, source, onClose }: { weather: WeatherContext; source: WeatherSource | null; onClose: () => void }) {
+  const reduceMotion = useReducedMotionConfig();
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+  return <div className="weather-panel-layer"><motion.button className="weather-panel-scrim" aria-label="Close weather" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /><motion.section id="today-weather-panel" role="dialog" aria-label="Weather details" className="weather-panel swiper-no-swiping" drag={reduceMotion ? false : "y"} dragConstraints={{ top: -90, bottom: 0 }} dragElastic={{ top: 0.2, bottom: 0 }} onDragEnd={(_, info) => { if (info.offset.y < -48 || info.velocity.y < -420) onClose(); }} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -12, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10, scale: .99 }} transition={reduceMotion ? { duration: .12 } : calmSpring}>
+    <div className="weather-panel-heading"><div><span>{weather.locationLabel ?? "Current area"}{source === "fixed-demo" ? " · Demo" : ""}</span><strong>{temperatureLabel(weather.currentTemperatureC ?? weather.minApparentTempC)} · {weather.summary}</strong></div><span>H {temperatureLabel(weather.dailyHighC ?? weather.maxApparentTempC)} · L {temperatureLabel(weather.dailyLowC ?? weather.minApparentTempC)}</span></div>
+    <div className="weather-hourly" aria-label="Hourly weather forecast">{(weather.hourly ?? []).map((hour) => <div key={hour.timestamp}><time>{new Intl.DateTimeFormat("en-US", { hour: "numeric", timeZone: weather.timezone }).format(hour.timestamp)}</time><strong>{temperatureLabel(hour.temperatureC)}</strong><span>{hour.precipitationProbability}% rain</span></div>)}</div>
+    <p>Updated {new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(weather.sourceTimestamp)}</p>
+  </motion.section></div>;
 }
 
 function Listening({ phase, transcript, tags, onEditTag, isMock, onUseDemo }: { phase: Phase; transcript: string; tags: IntentTag[]; onEditTag: (tag: IntentTag) => void; isMock: boolean; onUseDemo: () => void }) {

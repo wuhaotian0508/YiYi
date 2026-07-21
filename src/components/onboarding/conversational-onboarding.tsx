@@ -95,6 +95,7 @@ export function ConversationalOnboarding({
   const meaningAfterRef = useRef<HTMLSpanElement>(null);
   const revisedReasonRef = useRef<HTMLParagraphElement>(null);
   const continuityRef = useRef<HTMLParagraphElement>(null);
+  const continueRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<gsap.core.Timeline | null>(null);
   const completeRef = useRef(onComplete);
   useEffect(() => { completeRef.current = onComplete; }, [onComplete]);
@@ -124,14 +125,15 @@ export function ConversationalOnboarding({
     const meaningAfter = meaningAfterRef.current;
     const revisedReason = revisedReasonRef.current;
     const continuity = continuityRef.current;
-    if (!root || !splash || !title || !promise || !begin || !story || !decision || !decisionText || !caret || !understanding || !understandingStatus || !tags || !outfit || !outfitCanvas || !reason || !revisionRequest || !meaningBefore || !meaningAfter || !revisedReason || !continuity) return;
+    const continueAction = continueRef.current;
+    if (!root || !splash || !title || !promise || !begin || !story || !decision || !decisionText || !caret || !understanding || !understandingStatus || !tags || !outfit || !outfitCanvas || !reason || !revisionRequest || !meaningBefore || !meaningAfter || !revisedReason || !continuity || !continueAction) return;
 
     const tagNodes = tags.querySelectorAll("[data-story-tag]");
     const outfitPieces = outfitCanvas.querySelectorAll("[data-slot]");
     const timeline = gsap.timeline({ defaults: { ease: "power2.out" } });
     timelineRef.current = timeline;
 
-    gsap.set([title, promise, begin, story, decision, understanding, outfit, reason, revisionRequest, meaningAfter, revisedReason, continuity], { autoAlpha: 0 });
+    gsap.set([title, promise, begin, story, decision, understanding, outfit, reason, revisionRequest, meaningAfter, revisedReason, continuity, continueAction], { autoAlpha: 0 });
     gsap.set([tagNodes, outfitPieces], { autoAlpha: 0 });
     gsap.set(title, { y: reduceMotion ? 0 : 8 });
     gsap.set(promise, { y: reduceMotion ? 0 : 6 });
@@ -167,10 +169,10 @@ export function ConversationalOnboarding({
         .addLabel("decision:delete", 8.8)
         .to([decisionText, caret], { autoAlpha: 0, duration: 0.2 }, 8.8)
         .set(decisionText, { text: { value: "", delimiter: "", preserveSpaces: true } }, 9.05)
-        .addLabel("reframe:start", 9.25)
-        .set(decisionText, { text: { value: "I have class, dinner with friends,\nand a lot of walking.\nI want to feel relaxed and still look put together.", delimiter: "", preserveSpaces: true }, autoAlpha: 0 }, 9.25)
-        .to(decisionText, { autoAlpha: 1, duration: 0.24 }, 9.25)
-        .addLabel("reframe:complete", 12.85);
+        .addLabel("reframe:start", 10.7)
+        .set(decisionText, { text: { value: "I have class, dinner with friends,\nand a lot of walking.\nI want to feel relaxed and still look put together.", delimiter: "", preserveSpaces: true }, autoAlpha: 0 }, 10.7)
+        .to(decisionText, { autoAlpha: 1, duration: 0.24 }, 10.7)
+        .addLabel("reframe:complete", 14.3);
     } else {
       timeline
         .to(decisionText, { text: { value: "Maybe my navy hoodie...", delimiter: "", preserveSpaces: true }, duration: 2.25, ease: "none" }, 4.7)
@@ -189,7 +191,7 @@ export function ConversationalOnboarding({
         .addLabel("decision:delete")
         .to(decisionText, { text: { value: "", delimiter: "", preserveSpaces: true, rtl: true }, duration: 3.4, ease: "power2.in" })
         .set(caret, { autoAlpha: 0 })
-        .addLabel("reframe:start", "+=0.45")
+        .addLabel("reframe:start", "+=1.7")
         .to(decisionText, { text: { value: "I have class, dinner with friends,\nand a lot of walking.", delimiter: "", preserveSpaces: true }, duration: 4.15, ease: "none" })
         .to(decisionText, { text: { value: "I have class, dinner with friends,\nand a lot of walking.\nI want to feel relaxed and still look put together.", delimiter: "", preserveSpaces: true }, duration: 3.95, ease: "none", delay: 0.45 })
         .addLabel("reframe:complete");
@@ -205,25 +207,24 @@ export function ConversationalOnboarding({
       .set(understandingStatus, { textContent: "Understanding…", opacity: 0.45 })
       .to(understandingStatus, { opacity: 1, duration: 0.22 })
       .to(tagNodes, { autoAlpha: 1, y: 0, duration: reduceMotion ? 0.16 : 0.3, stagger: reduceMotion ? 0.18 : 0.34 })
-      .to(understanding, { autoAlpha: 0, y: reduceMotion ? 0 : -5, duration: reduceMotion ? 0.2 : 0.34 }, "+=0.5")
+      .to(understanding, { autoAlpha: 0, y: reduceMotion ? 0 : -5, duration: reduceMotion ? 0.2 : 0.34 }, "+=1.35")
       .addLabel("outfit:assemble")
       .to(outfit, { autoAlpha: 1, y: 0, duration: reduceMotion ? 0.22 : 0.38 })
       .to(outfitPieces, { autoAlpha: 1, y: 0, duration: reduceMotion ? 0.18 : 0.46, stagger: reduceMotion ? 0.12 : 0.38 })
-      .to(reason, { autoAlpha: 1, duration: reduceMotion ? 0.18 : 0.32 }, "+=0.25")
-      .addLabel("revision:request", "+=1.2")
+      .to(reason, { autoAlpha: 1, duration: reduceMotion ? 0.18 : 0.32 }, "+=0.35")
+      .addLabel("revision:request", "+=2.4")
       .call(() => setCoreState("thinking"))
       .to(revisionRequest, { autoAlpha: 1, y: 0, duration: reduceMotion ? 0.2 : 0.36 })
-      .to(meaningBefore, { autoAlpha: 0, y: reduceMotion ? 0 : -3, duration: reduceMotion ? 0.16 : 0.24 }, "+=0.65")
+      .to(meaningBefore, { autoAlpha: 0, y: reduceMotion ? 0 : -3, duration: reduceMotion ? 0.16 : 0.24 }, "+=1.2")
       .to(meaningAfter, { autoAlpha: 1, y: 0, duration: reduceMotion ? 0.16 : 0.28 }, "<0.1")
-      .addLabel("revision:replace", "+=0.35")
+      .addLabel("revision:replace", "+=0.8")
       .call(() => setRevised(true))
       .to([reason, revisionRequest], { autoAlpha: 0, y: reduceMotion ? 0 : -3, duration: 0.18 }, "+=0.65")
       .to(revisedReason, { autoAlpha: 1, duration: reduceMotion ? 0.18 : 0.3 })
-      .addLabel("complete", "+=0.25")
+      .addLabel("complete", "+=0.8")
       .to(continuity, { autoAlpha: 1, duration: reduceMotion ? 0.18 : 0.3 })
-      .call(() => {
-        if (!reviewMode) completeRef.current();
-      }, [], "+=1.8");
+      .to(continueAction, { autoAlpha: 1, duration: reduceMotion ? 0.12 : 0.24 }, "+=1.2")
+      .addPause();
 
     function syncStateAt(time: number) {
       const storyStarted = time >= timeFor(timeline, "decision:start");
@@ -324,8 +325,11 @@ export function ConversationalOnboarding({
           </div>
           <div className={styles.canvas} ref={outfitCanvasRef}><OutfitCanvas outfit={revised ? recommendationAfter : recommendationBefore} wardrobe={demoWardrobe} /></div>
           <div className={styles.revisionRequest} ref={revisionRequestRef}><span>“Make it a little more relaxed.”</span><small>YiYi is revising the shoes</small></div>
-          <p className={styles.revisedReason} ref={revisedReasonRef}>The sneakers relax the tailoring without changing the rest.</p>
-          <p className={styles.continuity} ref={continuityRef}>Only the shoes changed. Everything else stayed.</p>
+          <div className={styles.finalSummary}>
+            <p className={styles.revisedReason} ref={revisedReasonRef}>The sneakers relax the tailoring without changing the rest.</p>
+            <p className={styles.continuity} ref={continuityRef}>Only the shoes changed. Everything else stayed.</p>
+            <div className={styles.storyContinue} ref={continueRef}><PrimaryButton onClick={() => completeRef.current()}>Continue</PrimaryButton></div>
+          </div>
         </div>
       </div>
     </section>

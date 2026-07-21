@@ -92,7 +92,6 @@ test.describe("motion review", () => {
       "Tell YiYi about your day — not your clothes.",
       "You’re still choosing",
       "Show me how",
-      "Continue",
     ]) await expect(page.getByText(removedCopy, { exact: true })).toHaveCount(0);
 
     const storyText = page.locator("[data-story-text]");

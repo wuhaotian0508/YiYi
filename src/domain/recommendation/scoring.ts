@@ -1,4 +1,4 @@
-import { OutfitSchema, ScoreTraceSchema, type Outfit, type OutfitItemIds, type PreferenceSignal, type ScoreTrace, type StyleVector, type WardrobeItem } from "@/domain/schemas";
+import { OutfitSchema, ScoreTraceSchema, type Outfit, type OutfitItemIds, type OutfitSlot, type PreferenceSignal, type ScoreTrace, type StyleVector, type WardrobeItem } from "@/domain/schemas";
 import { activeLongTermPreferenceSignals, effectiveStyleProjection } from "@/domain/preferences/profile-mutations";
 import { matchesPreferenceSignal, outfitMatchesCombinationSignal } from "@/domain/preferences/preference-matching";
 import type { RecommendationContext } from "@/domain/recommendation/context";
@@ -234,7 +234,11 @@ export function scoreItemHeuristic(item: WardrobeItem, context: RecommendationCo
     : 0.7;
   const walking = item.category === "shoes" ? item.comfort / 5 : 0.7;
   const style = clamp01(0.5 + itemStyleSignal(item, context));
-  return clamp01(formalityFit * 0.25 + comfort * 0.2 + warmthFit * 0.18 + walking * 0.09 + style * 0.28);
+  const slot = item.category === "one_piece" ? "onePiece"
+    : ["headwear", "scarf", "belt", "eyewear", "hair_accessory", "other_accessory"].includes(item.category) ? "extraAccessory"
+      : item.category;
+  const situationPenalty = context.situation.slotPolicy[slot as OutfitSlot] === "discouraged" ? 0.22 : 0;
+  return clamp01(formalityFit * 0.25 + comfort * 0.2 + warmthFit * 0.18 + walking * 0.09 + style * 0.28 - situationPenalty);
 }
 
 export function scorePartialCompatibility(existingIds: Iterable<string>, next: WardrobeItem, context: RecommendationContext) {
@@ -323,10 +327,49 @@ function recencyScore(items: WardrobeItem[], context: RecommendationContext, out
 export function stableOutfitId(ids: OutfitItemIds) {
   const ordered = (["top", "bottom", "onePiece", "outerwear", "shoes", "bag", "jewelry", "extraAccessory"] as const)
     .map((slot) => `${slot}:${ids[slot] ?? "-"}`).join("|");
-  let hash = 2166136261;
-  for (const character of ordered) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619); }
-  const suffix = (hash >>> 0).toString(16).padStart(12, "0").slice(0, 12);
-  return `00000000-0000-4000-8000-${suffix}`;
+  const digest = sha1Bytes(`yiyi-outfit-v1|${ordered}`).slice(0, 16);
+  digest[6] = (digest[6] & 0x0f) | 0x50;
+  digest[8] = (digest[8] & 0x3f) | 0x80;
+  const hex = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function sha1Bytes(value: string) {
+  const source = new TextEncoder().encode(value);
+  const bitLength = source.length * 8;
+  const paddedLength = Math.ceil((source.length + 9) / 64) * 64;
+  const bytes = new Uint8Array(paddedLength);
+  bytes.set(source);
+  bytes[source.length] = 0x80;
+  const view = new DataView(bytes.buffer);
+  view.setUint32(paddedLength - 4, bitLength >>> 0, false);
+  view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x1_0000_0000), false);
+  let h0 = 0x67452301;
+  let h1 = 0xefcdab89;
+  let h2 = 0x98badcfe;
+  let h3 = 0x10325476;
+  let h4 = 0xc3d2e1f0;
+  const words = new Uint32Array(80);
+  for (let offset = 0; offset < paddedLength; offset += 64) {
+    for (let index = 0; index < 16; index += 1) words[index] = view.getUint32(offset + index * 4, false);
+    for (let index = 16; index < 80; index += 1) words[index] = rotateLeft(words[index - 3] ^ words[index - 8] ^ words[index - 14] ^ words[index - 16], 1);
+    let a = h0; let b = h1; let c = h2; let d = h3; let e = h4;
+    for (let index = 0; index < 80; index += 1) {
+      const f = index < 20 ? (b & c) | (~b & d) : index < 40 ? b ^ c ^ d : index < 60 ? (b & c) | (b & d) | (c & d) : b ^ c ^ d;
+      const constant = index < 20 ? 0x5a827999 : index < 40 ? 0x6ed9eba1 : index < 60 ? 0x8f1bbcdc : 0xca62c1d6;
+      const temporary = (rotateLeft(a, 5) + f + e + constant + words[index]) >>> 0;
+      e = d; d = c; c = rotateLeft(b, 30); b = a; a = temporary;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
+  }
+  const result = new Uint8Array(20);
+  const resultView = new DataView(result.buffer);
+  [h0, h1, h2, h3, h4].forEach((word, index) => resultView.setUint32(index * 4, word, false));
+  return result;
+}
+
+function rotateLeft(value: number, bits: number) {
+  return ((value << bits) | (value >>> (32 - bits))) >>> 0;
 }
 
 function thermalWeight(item: WardrobeItem) {

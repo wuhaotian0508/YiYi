@@ -24,6 +24,13 @@ export type VoiceDiagnostic = {
   audioStartedAt?: number;
   turnCommittedAt?: number;
   outfitVersionId?: string;
+  realtimeEvent?: string;
+  responseId?: string;
+  responseStatus?: string;
+  outputItemType?: string;
+  argumentBytes?: number;
+  effectiveToolChoice?: string;
+  effectiveToolNames?: string[];
 };
 
 export function logVoiceDiagnostic(diagnostic: VoiceDiagnostic) {

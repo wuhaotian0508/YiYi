@@ -32,6 +32,24 @@ describe("voice recommendation situation semantics", () => {
     expect(normalizeSituationProfile({ ...intentFor("Class"), walkingIntensity: 5 }).kind).toBe("walking");
   });
 
+  it("distinguishes playing from watching basketball and preserves ordered multi-activity context", () => {
+    const playing = normalizeSituationProfile(intentFor("I am playing basketball after class"));
+    const watching = normalizeSituationProfile(intentFor("I am watching a basketball game"));
+    const multi = normalizeSituationProfile({
+      ...intentFor("Play basketball, then dinner"),
+      activities: [
+        { label: "Play basketball", timeOfDay: "afternoon" as const },
+        { label: "Dinner", timeOfDay: "evening" as const },
+      ],
+    });
+    expect(playing.kind).toBe("court_sport");
+    expect(playing.slotPolicy.jewelry).toBe("forbidden");
+    expect(watching.kind).toBe("spectator_sport");
+    expect(watching.slotPolicy.jewelry).toBe("optional");
+    expect(multi.segments.map((segment) => segment.label)).toEqual(["Play basketball", "Dinner"]);
+    expect(multi.segments.map((segment) => segment.timeOfDay)).toEqual(["afternoon", "evening"]);
+  });
+
   it("uses situation semantics in legal search and deterministic scoring", () => {
     const hiking = runRecommendationDecision({ wardrobe: demoWardrobe, intent: intentFor("Hiking a trail"), profile, weather: null, operation: "initial" });
     expect(hiking.candidates.every((candidate) => /sneaker|trainer|boot|trail|hiking/.test(demoWardrobe.find((item) => item.id === candidate.itemIds.shoes)!.subtype.toLowerCase()))).toBe(true);

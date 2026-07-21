@@ -181,13 +181,13 @@
   align-items: center;
   background: #f8f8fa;
   color: #414146;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .outfit {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .outfitHeading {
@@ -197,12 +197,15 @@
 
 .outfitTags {
   min-height: 31px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  max-width: 100%;
+  align-content: center;
 }
 
 .outfitTags > span {
   min-width: 0;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
 }
 
 .meaning {
@@ -236,8 +239,13 @@
   margin: 5px auto 0;
   max-width: 300px;
   color: #76767c;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.38;
+}
+
+.storyContinue {
+  width: min(100%, 320px);
+  margin: 9px auto 0;
 }
 
 .canvas {
@@ -283,17 +291,23 @@
   font-size: 10px;
 }
 
-.revisedReason,
-.continuity {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 25px;
+.finalSummary {
+  min-height: 112px;
+  flex: 0 0 112px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
 }
 
+.revisedReason,
 .continuity {
-  bottom: 4px;
+  width: 100%;
+  margin-top: 2px;
+}
+
+.continuity {
+  margin-top: 3px;
   color: #4e4e53;
   font-weight: 560;
 }
@@ -311,9 +325,8 @@
   .outfitHeading { min-height: 88px; }
   .reason { margin-top: 7px; }
   .canvas :global(.outfit-canvas) { height: 315px; transform: scale(.78); }
-  .revisionRequest { bottom: 44px; }
-  .revisedReason { bottom: 20px; }
-  .continuity { bottom: 0; }
+  .revisionRequest { bottom: 112px; }
+  .finalSummary { min-height: 108px; flex-basis: 108px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

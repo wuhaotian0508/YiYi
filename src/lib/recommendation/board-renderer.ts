@@ -59,7 +59,8 @@ export async function renderCandidateBoard(outfit: Outfit, wardrobe: WardrobeIte
   const sprite = await loadImage("/demo-wardrobe/wardrobe-sprite.webp");
   try {
     for (const [slot, id] of Object.entries(outfit.itemIds) as [keyof Outfit["itemIds"], string | undefined][]) {
-      if (!id || !lookup.has(id)) continue;
+      if (!id) continue;
+      if (!lookup.has(id)) throw new Error("BOARD_WARDROBE_ITEM_MISSING");
       const anchor = anchors[slot];
       const localImage = await db.itemImages.get(id);
       if (localImage?.cutoutBlob) {
@@ -69,7 +70,7 @@ export async function renderCandidateBoard(outfit: Outfit, wardrobe: WardrobeIte
         continue;
       }
       const index = spriteIndexById[id];
-      if (index === undefined) continue;
+      if (index === undefined) throw new Error("BOARD_ITEM_IMAGE_MISSING");
       const cellWidth = sprite.image.naturalWidth / 4;
       const cellHeight = sprite.image.naturalHeight / 4;
       context.drawImage(
@@ -91,7 +92,7 @@ export async function renderCandidateBoard(outfit: Outfit, wardrobe: WardrobeIte
   for (const quality of attempts) {
     const dataUrl = canvas.toDataURL("image/webp", quality);
     const bytes = dataUrlByteLength(dataUrl);
-    if (bytes <= 240_000) return { dataUrl, bytes, width: canvas.width, height: canvas.height };
+    if (bytes <= 240_000) return { candidateId: outfit.id, dataUrl, bytes, width: canvas.width, height: canvas.height };
   }
   const compact = document.createElement("canvas");
   compact.width = 384;
@@ -102,5 +103,5 @@ export async function renderCandidateBoard(outfit: Outfit, wardrobe: WardrobeIte
   const dataUrl = compact.toDataURL("image/webp", 0.52);
   const bytes = dataUrlByteLength(dataUrl);
   if (bytes > 240_000) throw new Error("BOARD_TOO_LARGE");
-  return { dataUrl, bytes, width: compact.width, height: compact.height };
+  return { candidateId: outfit.id, dataUrl, bytes, width: compact.width, height: compact.height };
 }

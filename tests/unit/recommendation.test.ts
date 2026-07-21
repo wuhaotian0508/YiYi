@@ -7,7 +7,7 @@ import { activeLongTermPreferenceSignals, applyPreferenceDelta, removePreference
 import { createRecommendationContext, RecommendationError } from "@/domain/recommendation/context";
 import { validateOutfit } from "@/domain/recommendation/constraints";
 import { changedAndPreserved, runRecommendationDecision, validateRankingReferences, validateSelectedId } from "@/domain/recommendation/engine";
-import { matchesSoftPreference, normalizedWeightsFor, outfitComfortPerformance, outfitSimilarity, outfitThermalPerformance, scoreCandidate } from "@/domain/recommendation/scoring";
+import { matchesSoftPreference, normalizedWeightsFor, outfitComfortPerformance, outfitSimilarity, outfitThermalPerformance, scoreCandidate, stableOutfitId } from "@/domain/recommendation/scoring";
 import { IntentDeltaSchema, PreferenceDeltaSchema, PreferenceRuleSchema, type IntentDelta, type PreferenceDelta, type WardrobeItem } from "@/domain/schemas";
 import { demoIntent, demoPreferenceProfile, demoWardrobe } from "@/mocks/wardrobe";
 import { realtimeAgentInstructions } from "@/prompts/realtime-agent";
@@ -28,6 +28,15 @@ function addedItem(id: string, category: WardrobeItem["category"], subtype: stri
 }
 
 describe("constraint-first recommendation", () => {
+  it("uses a canonical full-width digest for stable outfit identity", () => {
+    const first = stableOutfitId({ top: "11111111-1111-4111-8111-111111111111", bottom: "22222222-2222-4222-8222-222222222222", shoes: "33333333-3333-4333-8333-333333333333" });
+    const reordered = stableOutfitId({ shoes: "33333333-3333-4333-8333-333333333333", bottom: "22222222-2222-4222-8222-222222222222", top: "11111111-1111-4111-8111-111111111111" });
+    const changed = stableOutfitId({ top: "11111111-1111-4111-8111-111111111111", bottom: "22222222-2222-4222-8222-222222222222", shoes: "44444444-4444-4444-8444-444444444444" });
+    expect(first).toBe(reordered);
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(first).not.toMatch(/^00000000-0000-4000-8000-/);
+    expect(changed).not.toBe(first);
+  });
   it("treats an explicitly named available wardrobe item as a required anchor", () => {
     const anchor = demoWardrobe.find((item) => item.availability === "available" && item.category === "top")!;
     const intent = { ...demoIntent, requiredItemIds: [anchor.id], freeformSummary: `I want to wear ${anchor.subtype}.` };

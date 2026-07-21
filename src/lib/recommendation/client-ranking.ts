@@ -2,6 +2,7 @@ import { z } from "zod";
 import { DailyIntentSchema, OutfitRankingResultSchema, WeatherContextSchema, type DailyIntent, type Outfit, type WardrobeItem, type WeatherContext } from "@/domain/schemas";
 import { applyVisualRanking, validateSelectedId } from "@/domain/recommendation/engine";
 import { renderCandidateBoard } from "@/lib/recommendation/board-renderer";
+import { providerSessionHeaders } from "@/lib/api/client-session";
 
 const RankResponseSchema = z.object({
   requestId: z.string().uuid(),
@@ -49,21 +50,25 @@ export async function rankOutfits(input: {
     DailyIntentSchema.parse(input.intent);
     if (input.weather) WeatherContextSchema.parse(input.weather);
     const rendered = await Promise.all(candidates.map((candidate) => renderCandidateBoard(candidate, input.wardrobe)));
+    const renderedByCandidate = new Map(rendered.map((board) => [board.candidateId, board]));
+    if (renderedByCandidate.size !== candidates.length || candidates.some((candidate) => !renderedByCandidate.has(candidate.id))) return fallback(candidates, "BOARD_CANDIDATE_BINDING_INVALID");
     const totalBoardBytes = rendered.reduce((sum, board) => sum + board.bytes, 0);
     if (rendered.some((board) => board.bytes > 240_000 || board.dataUrl.length > 340_000) || totalBoardBytes > 1_900_000) return fallback(candidates, "BOARD_TOO_LARGE");
-    const boards = candidates.map((candidate, index) => ({
+    const boards = candidates.map((candidate) => {
+      const board = renderedByCandidate.get(candidate.id)!;
+      return ({
       id: candidate.id,
       itemIds: Object.values(candidate.itemIds).filter((id): id is string => Boolean(id)),
       deterministicScore: candidate.deterministicScore,
-      boardDataUrl: rendered[index].dataUrl,
-      boardBytes: rendered[index].bytes,
-      boardWidth: rendered[index].width,
-      boardHeight: rendered[index].height,
-    }));
+      boardDataUrl: board.dataUrl,
+      boardBytes: board.bytes,
+      boardWidth: board.width,
+      boardHeight: board.height,
+    }); });
     const originalUtterance = input.originalUtterance.trim() || input.intent.freeformSummary.trim() || "Structured daily outfit request.";
     const response = await fetch("/api/outfits/rank", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...providerSessionHeaders() },
       cache: "no-store",
       signal: input.signal,
       body: JSON.stringify({
@@ -102,6 +107,7 @@ export async function rankOutfits(input: {
       model: payload.model,
     };
   } catch (error) {
-    return fallback(candidates, error instanceof Error && error.message === "BOARD_TOO_LARGE" ? "BOARD_TOO_LARGE" : "RANK_CLIENT_FAILED");
+    const code = error instanceof Error && ["BOARD_TOO_LARGE", "BOARD_ITEM_IMAGE_MISSING", "BOARD_WARDROBE_ITEM_MISSING"].includes(error.message) ? error.message : "RANK_CLIENT_FAILED";
+    return fallback(candidates, code);
   }
 }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { WeatherContextSchema, type WeatherContext } from "@/domain/schemas";
 import { db } from "@/lib/storage/db";
+import { providerSessionHeaders } from "@/lib/api/client-session";
 
 export type CompetitionWeatherMode = "device-location" | "fixed-demo";
 export type WeatherPermissionStatus = "not-requested" | "granted" | "denied" | "timeout" | "unavailable";
@@ -42,7 +43,12 @@ export async function getStoredWeatherState(): Promise<StoredWeatherState> {
   if (typeof value !== "string") return defaultWeatherState;
   try {
     const parsed = StoredWeatherStateSchema.safeParse(JSON.parse(value));
-    return parsed.success ? parsed.data : defaultWeatherState;
+    if (!parsed.success) return defaultWeatherState;
+    if (configuredWeatherMode() === "device-location" && parsed.data.source === "fixed-demo") {
+      await saveWeatherState(defaultWeatherState);
+      return defaultWeatherState;
+    }
+    return parsed.data;
   } catch {
     return defaultWeatherState;
   }
@@ -93,8 +99,16 @@ async function runWeatherRequest(fetcher: typeof fetch, geolocation: Geolocation
   }
   try {
     const position = await locate(geolocation);
-    const query = new URLSearchParams({ latitude: String(position.coords.latitude), longitude: String(position.coords.longitude) });
-    const response = await fetcher(`/api/weather?${query}`, { cache: "no-store" });
+    // City-level precision is sufficient for forecast selection and keeps exact
+    // coordinates out of request URLs and access logs.
+    const latitude = Math.round(position.coords.latitude * 100) / 100;
+    const longitude = Math.round(position.coords.longitude * 100) / 100;
+    const response = await fetcher("/api/weather", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...providerSessionHeaders() },
+      body: JSON.stringify({ latitude, longitude }),
+      cache: "no-store",
+    });
     if (!response.ok) {
       await saveWeatherState({ ...previous, permission: "granted", errorCode: "WEATHER_PROVIDER_FAILED" });
       return null;

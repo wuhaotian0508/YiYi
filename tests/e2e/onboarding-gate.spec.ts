@@ -56,7 +56,7 @@ test("device weather is live, cached across provider failure, and identifies its
   const page = await context.newPage();
   await setCompletedPersonal(page);
   let weatherCalls = 0;
-  await page.route("**/api/weather?*", async (route) => {
+  await page.route("**/api/weather", async (route) => {
     weatherCalls += 1;
     if (weatherCalls > 1) {
       await route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ requestId: "99999999-9999-4999-8999-999999999999", error: { code: "WEATHER_FAILED", message: "Unavailable", retryable: true } }) });

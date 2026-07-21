@@ -16,6 +16,8 @@ class FakePreferenceAdapter implements VoiceSessionAdapter {
   connect = vi.fn(async () => { this.stateListeners.forEach((listener) => listener("listening")); });
   disconnect = vi.fn(async () => { this.stateListeners.forEach((listener) => listener("idle")); });
   mute = vi.fn();
+  commitTurn = vi.fn();
+  interruptAndListen = vi.fn();
   onState(listener: (state: VoiceState) => void) { this.stateListeners.add(listener); return () => this.stateListeners.delete(listener); }
   onTranscript(listener: (transcript: TranscriptState) => void) { this.transcriptListeners.add(listener); return () => this.transcriptListeners.delete(listener); }
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failureListeners.add(listener); return () => this.failureListeners.delete(listener); }
@@ -47,6 +49,20 @@ function silverDelta(): PreferenceDelta {
 }
 
 describe("FineTuneVoice", () => {
+  it("maps the central control to start, commit, and interrupt using the shared turn controller", async () => {
+    const adapter = new FakePreferenceAdapter();
+    const coordinator = new VoiceSessionCoordinator({ diagnostic: () => undefined });
+    render(<FineTuneVoice profile={createNeutralPreferenceProfile(1)} onSaveDelta={vi.fn()} onProfileChange={vi.fn()} coordinator={coordinator} voiceMode="live" createAdapter={() => adapter} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Tell YiYi another preference" }));
+    await waitFor(() => expect(adapter.connect).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Done speaking" }));
+    expect(adapter.commitTurn).toHaveBeenCalledOnce();
+
+    act(() => adapter.stateListeners.forEach((listener) => listener("speaking")));
+    fireEvent.click(screen.getByRole("button", { name: "Interrupt YiYi" }));
+    expect(adapter.interruptAndListen).toHaveBeenCalledOnce();
+  });
   it("does not treat a live final transcript as success and reports done only after the tool persistence resolves", async () => {
     const adapter = new FakePreferenceAdapter();
     let toolHandler: ((delta: PreferenceDelta) => Promise<{ success: boolean; summary: string }>) | undefined;

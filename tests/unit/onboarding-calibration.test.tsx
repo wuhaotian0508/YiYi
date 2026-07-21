@@ -15,10 +15,12 @@ import type { CalibrationResponse, CalibrationResponseChoice } from "@/domain/sc
 afterEach(cleanup);
 
 function CalibrationHarness({
+  direction = "neutral",
   onFinish = vi.fn(),
   initialResponses = [],
   initialQuestionIndex = 0,
 }: {
+  direction?: "womenswear" | "menswear" | "mixed" | "neutral";
   onFinish?: () => void;
   initialResponses?: CalibrationResponse[];
   initialQuestionIndex?: number;
@@ -26,6 +28,7 @@ function CalibrationHarness({
   const [responses, setResponses] = useState<CalibrationResponse[]>(initialResponses);
   const [questionIndex, setQuestionIndex] = useState(initialQuestionIndex);
   return <OnboardingCalibration
+      direction={direction}
       questionIndex={questionIndex}
       responses={responses}
       onQuestionIndexChange={setQuestionIndex}
@@ -94,6 +97,18 @@ describe("formal onboarding calibration", () => {
     expect([...labels].map((label) => label.textContent)).toEqual(["ARelaxed everyday", "BPolished tailoring"]);
     expect(document.querySelector('[data-source-option="a"]')).toHaveAttribute("data-presentation-position", "left");
     expect(document.querySelector('[data-source-option="b"]')).toHaveAttribute("data-presentation-position", "right");
+  });
+
+  it("selects stable direction-specific assets without changing canonical option mapping", () => {
+    const { rerender } = render(<CalibrationHarness direction="womenswear" />);
+    expect(decodeURIComponent(screen.getByRole("img", { name: /matching mannequins/i }).getAttribute("src") ?? "")).toContain("/v3/womenswear/pair-relaxed-polished.webp");
+    expect(document.querySelector('[data-source-option="a"]')).toHaveAttribute("data-presentation-position", "left");
+
+    rerender(<CalibrationHarness direction="menswear" />);
+    expect(decodeURIComponent(screen.getByRole("img", { name: /matching mannequins/i }).getAttribute("src") ?? "")).toContain("/v2/pair-relaxed-polished.webp");
+
+    rerender(<CalibrationHarness direction="neutral" />);
+    expect(decodeURIComponent(screen.getByRole("img", { name: /matching mannequins/i }).getAttribute("src") ?? "")).toContain("/v3/neutral/pair-relaxed-polished.webp");
   });
 
   it("restores a legacy reversed response without moving the options or changing its canonical choice", () => {

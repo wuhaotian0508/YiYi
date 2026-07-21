@@ -491,6 +491,60 @@ export async function setExperienceMode(mode: ExperienceMode, resetDemoSeed = fa
   });
 }
 
+/**
+ * Persist one personal item, its image set, and the Demo→Personal mode change
+ * in one IndexedDB transaction. Repeating the same item ID is idempotent only
+ * when both records already exist; a half-record is treated as corruption.
+ */
+export async function savePersonalWardrobeItem(item: WardrobeItem, images: ItemImageSet) {
+  if (item.id !== images.itemId) throw new Error("WARDROBE_IMAGE_ITEM_MISMATCH");
+  return db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
+    const [existingItem, existingImages] = await Promise.all([db.wardrobeItems.get(item.id), db.itemImages.get(item.id)]);
+    if (existingItem || existingImages) {
+      if (existingItem && existingImages) return { itemId: item.id, alreadySaved: true };
+      throw new Error("PARTIAL_WARDROBE_RECORD");
+    }
+
+    const storedIds = (await db.appSettings.get(demoItemIdsKey))?.value;
+    let parsedIds: unknown = [];
+    if (typeof storedIds === "string") {
+      try { parsedIds = JSON.parse(storedIds) as unknown; } catch { parsedIds = []; }
+    }
+    const recordedDemoIds = Array.isArray(parsedIds) ? parsedIds.filter((value): value is string => typeof value === "string") : [];
+    const taggedDemoIds = (await db.wardrobeItems.filter((candidate) => candidate.dataProvenance === "demo").toArray()).map((candidate) => candidate.id);
+    const demoIds = [...new Set([...recordedDemoIds, ...taggedDemoIds])];
+    if (demoIds.length) {
+      await db.wardrobeItems.bulkDelete(demoIds);
+      await db.itemImages.bulkDelete(demoIds);
+    }
+
+    const profile = await db.preferenceProfiles.get("default");
+    if (isCannedDemoProfile(profile)) {
+      const personalProfile = profile ? materializePersonalProfile(profile) : null;
+      if (personalProfile) await db.preferenceProfiles.put(personalProfile);
+      else await db.preferenceProfiles.delete("default");
+    }
+    await db.dailySessions.clear();
+    await db.outfitVersions.clear();
+    await db.wardrobeItems.add(item);
+    await db.itemImages.add(images);
+    await db.appSettings.put({ key: experienceModeKey, value: "personal" });
+    await db.appSettings.put({ key: demoWardrobeSeededKey, value: true });
+    const onboarding = parseOnboardingState((await db.appSettings.get(onboardingStateKey))?.value);
+    if (onboarding?.status === "complete" && onboarding.experienceMode !== "personal") {
+      await writeOnboardingState({ ...onboarding, experienceMode: "personal" });
+    }
+    return { itemId: item.id, alreadySaved: false };
+  });
+}
+
+export async function pruneProcessingJobs(now = Date.now(), maximumAgeMs = 24 * 60 * 60 * 1_000) {
+  const cutoff = now - maximumAgeMs;
+  const expired = await db.processingJobs.where("createdAt").below(cutoff).primaryKeys();
+  if (expired.length) await db.processingJobs.bulkDelete(expired);
+  return expired.length;
+}
+
 export async function getExperienceMode(): Promise<ExperienceMode | null> {
   const value = (await db.appSettings.get(experienceModeKey))?.value;
   return value === "demo" || value === "personal" ? value : null;

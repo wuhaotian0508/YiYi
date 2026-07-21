@@ -1,9 +1,10 @@
 "use client";
 
 import { YiYiMark } from "@/components/brand/yiyi-mark";
-import { motion, useReducedMotionConfig } from "motion/react";
+import { motion, useReducedMotionConfig, useSpring, useTransform } from "motion/react";
 import { motionDuration, motionEase, quickSpring } from "@/lib/motion/tokens";
 import { useSyncExternalStore } from "react";
+import { voiceInputEnergy, voiceOutputEnergy } from "@/lib/realtime/audio-energy";
 
 export type VoiceVisualState =
   | "idle"
@@ -69,7 +70,7 @@ export function VoiceCore({
   const field = fieldMotion(visualState, reduceMotion);
   const contents = <>
     <motion.span className="voice-core-field" aria-hidden="true" animate={field.animate} transition={field.transition}><span /><span /><span /></motion.span>
-    <motion.span className="voice-core-mark" animate={!reduceMotion && visualState === "speaking" ? { y: [0, -1, 0] } : !reduceMotion && visualState === "interrupted" ? { scale: [1, 0.94, 1] } : { y: 0, scale: 1 }} transition={visualState === "speaking" ? { duration: 0.76, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" } : quickSpring}>
+    <motion.span className="voice-core-mark" animate={!reduceMotion && visualState === "speaking" ? { y: [0, -1, 0] } : !reduceMotion && visualState === "interrupted" ? { scale: [1, 0.94, 1] } : { y: 0, scale: 1 }} transition={visualState === "speaking" ? { duration: 0.76, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" } : visualState === "interrupted" ? { duration: 0.28, ease: motionEase.standard } : quickSpring}>
       <YiYiMark size={72} expression={expressionFor(visualState)} />
     </motion.span>
   </>;
@@ -98,15 +99,25 @@ export function VoiceDock({ state, status, onPrimary, active = false, disabled =
   disabled?: boolean;
 }) {
   const reduceMotion = useHydratedReducedMotion();
+  const inputEnergy = useSpring(voiceInputEnergy, { stiffness: 240, damping: 30, mass: .45 });
+  const outputEnergy = useSpring(voiceOutputEnergy, { stiffness: 220, damping: 28, mass: .5 });
+  const inputScale = useTransform(inputEnergy, [0, 1], [1, 1.16]);
+  const outputScale = useTransform(outputEnergy, [0, 1], [1, 1.12]);
+  const inputOpacity = useTransform(inputEnergy, [0, 1], [.72, 1]);
+  const outputOpacity = useTransform(outputEnergy, [0, 1], [.76, 1]);
+  const energyScale = state === "listening" ? inputScale : state === "speaking" ? outputScale : undefined;
+  const energyOpacity = state === "listening" ? inputOpacity : state === "speaking" ? outputOpacity : undefined;
   const interactive = Boolean(onPrimary) && ["idle", "listening", "speaking", "error", "recoverable_error"].includes(state);
   const ringActive = state === "listening" || state === "speaking";
   const primaryContents = <>
-    <span className="voice-dock-rings" aria-hidden="true">
+    <motion.span className="voice-dock-rings" aria-hidden="true" style={reduceMotion ? undefined : { scale: energyScale, opacity: energyOpacity }}>
       <motion.i animate={!reduceMotion && ringActive ? { scale: [0.92, 1.34], opacity: [0.48, 0] } : state === "committing" ? { scale: [1.22, 0.94], opacity: [0, 0.5] } : { scale: 1, opacity: 0 }} transition={!reduceMotion && ringActive ? { duration: state === "speaking" ? 1.25 : 1.9, repeat: Number.POSITIVE_INFINITY, ease: "easeOut" } : { duration: 0.34, ease: motionEase.standard }} />
       <motion.i animate={!reduceMotion && ringActive ? { scale: [0.9, 1.27], opacity: [0.32, 0] } : { scale: 1, opacity: 0 }} transition={!reduceMotion && ringActive ? { duration: state === "speaking" ? 1.25 : 2.15, delay: 0.32, repeat: Number.POSITIVE_INFINITY, ease: "easeOut" } : { duration: motionDuration.short }} />
-    </span>
-    <motion.span animate={!reduceMotion && state === "revising" ? { scale: [1, 1.06, 1] } : !reduceMotion && state === "interrupted" ? { scale: [1, 0.92, 1] } : { scale: 1 }} transition={state === "revising" ? { duration: 0.48, ease: motionEase.standard } : quickSpring}>
-      <YiYiMark size={46} expression={expressionFor(state)} />
+    </motion.span>
+    <motion.span style={reduceMotion ? undefined : { scale: energyScale }}>
+      <motion.span animate={!reduceMotion && state === "revising" ? { scale: [1, 1.06, 1] } : !reduceMotion && state === "interrupted" ? { scale: [1, 0.92, 1] } : { scale: 1 }} transition={state === "revising" ? { duration: 0.48, ease: motionEase.standard } : state === "interrupted" ? { duration: 0.28, ease: motionEase.standard } : quickSpring}>
+        <YiYiMark size={46} expression={expressionFor(state)} />
+      </motion.span>
     </motion.span>
   </>;
   return <div className="voice-dock" data-active={active} data-state={state}>

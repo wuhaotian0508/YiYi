@@ -26,9 +26,9 @@
     "visibleBrandMarks": false
   },
   "runtimePresentation": {
-    "counterbalanced": true,
-    "strategy": "session-seeded alternating A/B left-right order",
-    "imageHandling": "source halves are repositioned without mirroring garments",
+    "counterbalanced": false,
+    "strategy": "canonical A-left and B-right in formal onboarding",
+    "imageHandling": "source halves remain in canonical authored positions without mirroring garments",
     "responseProvenance": "actual left-to-right order is stored on every new calibration response"
   },
   "sharedKnownBiasFlags": [

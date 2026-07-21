@@ -131,7 +131,7 @@ describe("ranking boundary semantics", () => {
 
   it("substitutes structured context for a blank utterance and rejects unknown provider IDs", async () => {
     const candidate = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: createNeutralPreferenceProfile(), weather: null, operation: "initial" }).deterministicAnswer;
-    renderMock.mockResolvedValue({ dataUrl: "data:image/webp;base64,AA==", bytes: 2, width: 512, height: 640 });
+    renderMock.mockImplementation(async (outfit: { id: string }) => ({ candidateId: outfit.id, dataUrl: "data:image/webp;base64,AA==", bytes: 2, width: 512, height: 640 }));
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       requestId: "99999999-9999-4999-8999-999999999998",
       ranking: { selectedCandidateId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", mainReason: "Invalid", candidateScores: [] },
@@ -150,10 +150,19 @@ describe("ranking boundary semantics", () => {
 
   it("fails over before fetch when any rendered board exceeds the API contract", async () => {
     const candidate = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: createNeutralPreferenceProfile(), weather: null, operation: "initial" }).deterministicAnswer;
-    renderMock.mockResolvedValue({ dataUrl: "data:image/webp;base64,AA==", bytes: 240_001, width: 512, height: 640 });
+    renderMock.mockImplementation(async (outfit: { id: string }) => ({ candidateId: outfit.id, dataUrl: "data:image/webp;base64,AA==", bytes: 240_001, width: 512, height: 640 }));
     const fetchMock = vi.spyOn(globalThis, "fetch");
     const ranked = await rankOutfits({ candidates: [candidate], wardrobe: demoWardrobe, intent: demoIntent, originalUtterance: demoIntent.freeformSummary, preferenceSummary: "", weather: null });
     expect(ranked).toMatchObject({ source: "fallback", diagnosticCode: "BOARD_TOO_LARGE" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before visual ranking when any candidate item image is missing", async () => {
+    const candidate = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: createNeutralPreferenceProfile(), weather: null, operation: "initial" }).deterministicAnswer;
+    renderMock.mockRejectedValue(new Error("BOARD_ITEM_IMAGE_MISSING"));
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const ranked = await rankOutfits({ candidates: [candidate], wardrobe: demoWardrobe, intent: demoIntent, originalUtterance: demoIntent.freeformSummary, preferenceSummary: "", weather: null });
+    expect(ranked).toMatchObject({ source: "fallback", diagnosticCode: "BOARD_ITEM_IMAGE_MISSING" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -161,7 +170,7 @@ describe("ranking boundary semantics", () => {
     const candidates = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile: createNeutralPreferenceProfile(), weather: null, operation: "initial" }).candidates.slice(0, 2);
     const strong = { ...candidates[0], deterministicScore: 95, scoreTrace: candidates[0].scoreTrace ? { ...candidates[0].scoreTrace, deterministicTotal: 0.95 } : undefined };
     const weak = { ...candidates[1], deterministicScore: 70, scoreTrace: candidates[1].scoreTrace ? { ...candidates[1].scoreTrace, deterministicTotal: 0.7 } : undefined };
-    renderMock.mockResolvedValue({ dataUrl: "data:image/webp;base64,AA==", bytes: 2, width: 512, height: 640 });
+    renderMock.mockImplementation(async (outfit: { id: string }) => ({ candidateId: outfit.id, dataUrl: "data:image/webp;base64,AA==", bytes: 2, width: 512, height: 640 }));
     const visual = (candidateId: string, value: number) => ({ candidateId, visualCoherence: value, colorBalance: value, silhouetteBalance: value, materialHarmony: value, styleClarity: value, reason: `Visual reason ${value}`, concerns: value < 0.7 ? ["Low visual clarity"] : [] });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       requestId: "99999999-9999-4999-8999-999999999997",

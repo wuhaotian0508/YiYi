@@ -4,7 +4,6 @@ import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
 import { logApiDiagnostic, safeErrorMetadata } from "@/lib/api/diagnostics";
 import { OpenAIRealtimeVoiceAdapter, resolveAvailabilityItemId, yiyiTurnDetection, type VoiceToolHandlers } from "@/lib/realtime/voice-session";
 import { shouldSeedDemoWardrobe } from "@/lib/storage/db";
-import { demoIntent } from "@/mocks/wardrobe";
 import { copy } from "@/content/copy";
 import { configuredWeatherMode, resolveWeatherForSession } from "@/lib/weather/client";
 
@@ -24,7 +23,7 @@ describe("audit regressions", () => {
 
   it("preserves recommendation failures in the Realtime handler contract", async () => {
     const handler: VoiceToolHandlers["requestRecommendation"] = async () => ({ success: false, summary: "No legal outfit." });
-    await expect(handler(demoIntent)).resolves.toEqual({ success: false, summary: "No legal outfit." });
+    await expect(handler({ userRequest: "Class today.", activityPhrases: ["class"], desiredFeelings: [], exclusions: [], wardrobeAnchors: [] })).resolves.toEqual({ success: false, summary: "No legal outfit." });
   });
 
   it("keeps personal preference defaults free of demo assumptions", () => {
@@ -47,7 +46,7 @@ describe("audit regressions", () => {
     expect(yiyiTurnDetection).toEqual({
       type: "semantic_vad",
       eagerness: "auto",
-      createResponse: true,
+      createResponse: false,
       interruptResponse: false,
     });
   });
@@ -125,7 +124,7 @@ describe("audit regressions", () => {
     const payload = await response.json();
     expect(response.status).toBe(200);
     expect(payload.source).toBe("fixed-demo");
-    expect(payload.weather.summary).toBe("58° · Light rain");
+    expect(payload.weather).toMatchObject({ currentTemperatureC: 14, summary: "Light rain", locationLabel: "Demo location" });
   });
 
   it("defaults to device weather and restores persisted weather only when fresh weather fails", () => {
@@ -160,6 +159,12 @@ describe("audit regressions", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       timezone: "America/Los_Angeles",
       utc_offset_seconds: -25_200,
+      current: {
+        time: Math.floor(now / 1_000),
+        interval: 900,
+        temperature_2m: 14.7,
+        weather_code: 0,
+      },
       hourly: {
         time: times,
         apparent_temperature: values,
@@ -171,7 +176,13 @@ describe("audit regressions", () => {
     const response = await getWeather(new Request("http://localhost/api/weather?latitude=37.7&longitude=-122.4"));
     const payload = await response.json();
     expect(response.status).toBe(200);
-    expect(payload.weather).toMatchObject({ minApparentTempC: 21, maxApparentTempC: 32, precipitationProbability: 32, sourceTimestamp: times[21] * 1_000 });
+    expect(payload.weather).toMatchObject({
+      minApparentTempC: 21,
+      maxApparentTempC: 32,
+      precipitationProbability: 32,
+      sourceTimestamp: now,
+      locationLabel: "Current area",
+    });
     const providerUrl = new URL(String(fetchSpy.mock.calls[0]?.[0]));
     expect(providerUrl.searchParams.get("forecast_days")).toBe("2");
     expect(providerUrl.searchParams.get("timeformat")).toBe("unixtime");

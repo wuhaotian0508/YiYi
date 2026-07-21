@@ -13,11 +13,13 @@ import { Garment } from "@/components/wardrobe/garment";
 import { VoiceCore } from "@/components/voice/voice-core";
 import { ItemImageSetSchema, WardrobeAnalysisSchema, WardrobeItemSchema, type WardrobeAnalysis, type WardrobeItem } from "@/domain/schemas";
 import { clothingCategories, colorHex, colorIds, colorLabels, commonMaterials } from "@/domain/taxonomy";
-import { db, setExperienceMode } from "@/lib/storage/db";
+import { db, getExperienceMode, pruneProcessingJobs, savePersonalWardrobeItem } from "@/lib/storage/db";
 import { demoWardrobe } from "@/mocks/wardrobe";
 import { calmSpring } from "@/lib/motion/tokens";
-import { canvasToBlob, encodeCanvasWithinUploadLimit, MAX_FILE_BYTES, MAX_UPLOAD_BYTES } from "@/lib/images/prepare-upload";
+import { canvasToBlob } from "@/lib/images/prepare-upload";
+import { ClientImagePreparationError, preprocessWardrobeImage } from "@/lib/images/client-preprocess";
 import { shouldRetryWardrobeProcessing, WardrobeProcessErrorResponseSchema, WardrobeProcessingError } from "@/lib/wardrobe/process-client";
+import { providerSessionHeaders } from "@/lib/api/client-session";
 
 type Step = "choose" | "processing" | "review" | "error";
 type Sheet = "color" | "material" | "category" | null;
@@ -30,25 +32,6 @@ const ProcessResponseSchema = z.object({
   source: z.object({ cutout: z.enum(["mock", "photoroom"]), analysis: z.enum(["mock", "terra", "manual-review"]) }).strict(),
   diagnostics: z.object({ photoroomMs: z.number().nullable(), analysisMs: z.number().nullable(), analysisErrorCode: z.string().nullable() }).strict(),
 }).strict();
-
-async function preprocessImage(file: File) {
-  if (file.size > MAX_FILE_BYTES) throw new Error("Choose an image smaller than 20 MB.");
-  try {
-    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-    const scale = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Image processing is unavailable.");
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    bitmap.close();
-    return encodeCanvasWithinUploadLimit(canvas);
-  } catch (error) {
-    if (file.size <= MAX_UPLOAD_BYTES) return file;
-    throw error instanceof Error ? error : new Error("This image could not be prepared.");
-  }
-}
 
 function dataUrlToBlob(dataUrl: string) {
   const match = /^data:(image\/(?:webp|png));base64,([A-Za-z0-9+/]*={0,2})$/.exec(dataUrl);
@@ -101,12 +84,16 @@ export default function AddWardrobePage() {
   const [error, setError] = useState<{ message: string; requestId: string | null; code: string | null; retryable: boolean }>({ message: "", requestId: null, code: null, retryable: false });
   const [saving, setSaving] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
+  const savePromiseRef = useRef<Promise<void> | null>(null);
+  const saveItemIdRef = useRef<string | null>(null);
   const reduceMotion = useReducedMotionConfig();
 
   useEffect(() => () => {
     controllerRef.current?.abort();
     if (preview) URL.revokeObjectURL(preview);
   }, [preview]);
+
+  useEffect(() => { void pruneProcessingJobs(); }, []);
 
   async function requestProcessing(image: Blob, filename: string, attempt = 0): Promise<z.infer<typeof ProcessResponseSchema>> {
     const form = new FormData();
@@ -115,7 +102,7 @@ export default function AddWardrobePage() {
     controllerRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 62_000);
     try {
-      const response = await fetch("/api/wardrobe/process", { method: "POST", body: form, cache: "no-store", signal: controller.signal });
+      const response = await fetch("/api/wardrobe/process", { method: "POST", headers: providerSessionHeaders(), body: form, cache: "no-store", signal: controller.signal });
       if (!response.ok) {
         const parsedError = WardrobeProcessErrorResponseSchema.safeParse(await response.json().catch(() => null));
         if (!parsedError.success) throw new WardrobeProcessingError("We couldn’t process this item. Please try again.", null, "INVALID_ERROR_RESPONSE", false, response.status);
@@ -134,12 +121,13 @@ export default function AddWardrobePage() {
 
   async function chooseFile(file?: File) {
     if (!file) return;
+    saveItemIdRef.current = null;
     setError({ message: "", requestId: null, code: null, retryable: false });
     setStep("processing");
     const jobId = crypto.randomUUID();
     await db.processingJobs.put({ id: jobId, status: "processing", createdAt: Date.now() });
     try {
-      const normalized = await preprocessImage(file);
+      const normalized = await preprocessWardrobeImage(file);
       const response = await requestProcessing(normalized, file.name);
       const cutout = dataUrlToBlob(response.cutoutDataUrl);
       const nextPreview = URL.createObjectURL(cutout);
@@ -154,18 +142,32 @@ export default function AddWardrobePage() {
     } catch (processingError) {
       setError(processingError instanceof WardrobeProcessingError
         ? { message: processingError.message, requestId: processingError.requestId, code: processingError.code, retryable: processingError.retryable }
-        : { message: processingError instanceof Error ? processingError.message : "We couldn’t process this item. Please try again.", requestId: null, code: "CLIENT_PROCESSING_FAILED", retryable: false });
+        : processingError instanceof ClientImagePreparationError
+          ? { message: processingError.message, requestId: null, code: processingError.code, retryable: false }
+          : { message: processingError instanceof Error ? processingError.message : "We couldn’t process this item. Please try again.", requestId: null, code: "CLIENT_PROCESSING_FAILED", retryable: false });
       setStep("error");
       await db.processingJobs.update(jobId, { status: "failed" });
     }
   }
 
-  async function saveItem() {
-    if (!analysis || !cutoutBlob || !sourceBlob || saving || (analysisStatus === "needs-review" && !["category", "colors", "materials"].every((field) => analysis.userEditedFields.includes(field)))) return;
+  function saveItem() {
+    if (savePromiseRef.current) return savePromiseRef.current;
+    const operation = saveItemOnce();
+    savePromiseRef.current = operation;
+    void operation.finally(() => { if (savePromiseRef.current === operation) savePromiseRef.current = null; });
+    return operation;
+  }
+
+  async function saveItemOnce() {
+    if (!analysis || !cutoutBlob || !sourceBlob || (analysisStatus === "needs-review" && !["category", "colors", "materials"].every((field) => analysis.userEditedFields.includes(field)))) return;
     setSaving(true);
+    const requestId = crypto.randomUUID();
+    let stage = "schema";
     try {
       const now = Date.now();
-      const id = crypto.randomUUID();
+      const id = saveItemIdRef.current ?? crypto.randomUUID();
+      saveItemIdRef.current = id;
+      recordLocalSave(requestId, stage, "started");
       const item = WardrobeItemSchema.parse({
         ...analysis,
         id,
@@ -176,11 +178,20 @@ export default function AddWardrobePage() {
         updatedAt: now,
         lastWornAt: null,
       });
+      recordLocalSave(requestId, stage, "success");
+      stage = "blob-copy";
+      recordLocalSave(requestId, stage, "started");
       const originalBlob = new Blob([await sourceBlob.arrayBuffer()], { type: sourceBlob.type || "image/webp" });
       const storedCutoutBlob = new Blob([await cutoutBlob.arrayBuffer()], { type: cutoutBlob.type || "image/webp" });
+      recordLocalSave(requestId, stage, "success");
+      stage = "thumbnail";
+      recordLocalSave(requestId, stage, "started");
       const generatedThumbnail = await makeThumbnail(storedCutoutBlob);
       const thumbnailBlob = new Blob([await generatedThumbnail.arrayBuffer()], { type: generatedThumbnail.type || "image/webp" });
+      recordLocalSave(requestId, stage, "success", { outputMime: thumbnailBlob.type });
+      stage = "dimensions";
       const dimensions = await imageDimensions(storedCutoutBlob);
+      stage = "image-schema";
       const images = ItemImageSetSchema.parse({
         itemId: id,
         originalBlob,
@@ -190,14 +201,24 @@ export default function AddWardrobePage() {
         createdAt: now,
         updatedAt: now,
       });
-      await db.transaction("rw", db.wardrobeItems, db.itemImages, async () => {
-        await db.wardrobeItems.add(item);
-        await db.itemImages.add(images);
-      });
-      await setExperienceMode("personal");
+      stage = "indexeddb-transaction";
+      recordLocalSave(requestId, stage, "started");
+      const result = await savePersonalWardrobeItem(item, images);
+      recordLocalSave(requestId, stage, "success", { alreadySaved: result.alreadySaved });
       router.push("/wardrobe");
-    } catch {
-      setError({ message: "This item could not be saved. Please try again.", requestId: null, code: "LOCAL_SAVE_FAILED", retryable: true });
+    } catch (saveError) {
+      const id = saveItemIdRef.current;
+      const [storedItem, storedImages, mode] = id
+        ? await Promise.all([db.wardrobeItems.get(id).catch(() => undefined), db.itemImages.get(id).catch(() => undefined), getExperienceMode().catch(() => null)])
+        : [undefined, undefined, null];
+      if (storedItem && storedImages && mode === "personal") {
+        recordLocalSave(requestId, "post-failure-check", "success", { recoveredCommittedRecord: true });
+        router.push("/wardrobe");
+        return;
+      }
+      const classified = classifyLocalSaveError(saveError, Boolean(storedItem) !== Boolean(storedImages));
+      recordLocalSave(requestId, stage, "error", { errorCode: classified.code, errorType: saveError instanceof Error ? saveError.name : typeof saveError });
+      setError({ message: classified.message, requestId, code: classified.code, retryable: classified.retryable });
       setStep("error");
       setSaving(false);
     }
@@ -233,6 +254,23 @@ export default function AddWardrobePage() {
   const sheetLabel = sheet === "color" ? "Select colors" : sheet === "material" ? "Select materials" : "Select category";
   const reviewReady = analysisStatus === "complete" || ["category", "colors", "materials"].every((field) => analysis?.userEditedFields.includes(field));
   return <main className="phone-page"><div className="page-column"><header className="topbar"><Link href="/wardrobe" className="icon-button" aria-label="Back"><ChevronLeft /></Link><div className="topbar-title">{step === "review" ? "Review item" : "Add clothes"}</div><span /></header><AnimatePresence mode="popLayout" initial={false}><motion.div className="add-flow-motion" key={step} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(7px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(-4px)" }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{step === "choose" && <Choose onFile={(file) => void chooseFile(file)} />}{step === "processing" && <Processing />}{step === "error" && <ProcessingError error={error} onRetry={() => setStep("choose")} />}{step === "review" && reviewItem && analysis && <Review item={reviewItem} preview={preview} onSheet={setSheet} onSave={() => void saveItem()} saving={saving} needsReview={analysisStatus === "needs-review"} reviewReady={reviewReady} />}</motion.div></AnimatePresence><BottomSheet open={Boolean(sheet && analysis)} onClose={() => setSheet(null)} label={sheetLabel}>{analysis && <>{sheet === "color" && <ColorSheet value={analysis.primaryColor} onChange={(primaryColor) => updateAnalysis({ primaryColor })} onDone={() => setSheet(null)} />}{sheet === "material" && <MaterialSheet value={analysis.materials[0] ?? "Unknown"} onChange={(material) => updateAnalysis({ materials: [material] })} onDone={() => setSheet(null)} />}{sheet === "category" && <CategorySheet value={analysis.category} onChange={(category) => updateAnalysis({ category })} onDone={() => setSheet(null)} />}</>}</BottomSheet></div></main>;
+}
+
+function classifyLocalSaveError(error: unknown, partialRecord: boolean) {
+  if (partialRecord) return { code: "LOCAL_SAVE_PARTIAL_RECORD", message: "The item was not fully saved. Try again after reopening YiYi.", retryable: true };
+  if (error instanceof DOMException && ["QuotaExceededError", "NS_ERROR_DOM_QUOTA_REACHED"].includes(error.name)) {
+    return { code: "LOCAL_STORAGE_QUOTA_EXCEEDED", message: "This device does not have enough browser storage for the item.", retryable: false };
+  }
+  const message = error instanceof Error ? error.message : "";
+  if (/thumbnail|image conversion/i.test(message)) return { code: "THUMBNAIL_GENERATION_FAILED", message: "YiYi could not prepare a saved preview for this image.", retryable: true };
+  if (/schema|validation/i.test(message)) return { code: "LOCAL_ITEM_VALIDATION_FAILED", message: "One or more item details are invalid. Review them and try again.", retryable: true };
+  return { code: "LOCAL_SAVE_FAILED", message: "This item could not be saved. Please try again.", retryable: true };
+}
+
+function recordLocalSave(requestId: string, stage: string, outcome: "started" | "success" | "error", extra: Record<string, unknown> = {}) {
+  const payload = { event: "yiyi_wardrobe_local_save", requestId, stage, outcome, ...extra };
+  if (outcome === "error") console.error(JSON.stringify(payload));
+  else if (process.env.NODE_ENV !== "test") console.info(JSON.stringify(payload));
 }
 
 function Choose({ onFile }: { onFile: (file?: File) => void }) {

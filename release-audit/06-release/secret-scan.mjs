@@ -1,24 +1,15 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildReleaseArchive } from "../../scripts/build-release-archive.mjs";
 
-const tracked = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })
-  .split("\0")
-  .filter(Boolean)
-  .filter((file) => file !== "pnpm-lock.yaml" && !file.startsWith("release-audit/"));
-const patterns = [
-  /sk-[A-Za-z0-9_-]{20,}/,
-  /Bearer [A-Za-z0-9._-]{20,}/,
-  /(?:UPSTASH_REDIS_REST_TOKEN|PHOTOROOM_API_KEY|OPENAI_API_KEY)=\S+/,
-];
-const findings = [];
-for (const file of tracked) {
-  let content;
-  try { content = readFileSync(file, "utf8"); } catch { continue; }
-  if (content.includes("\0")) continue;
-  if (patterns.some((pattern) => pattern.test(content))) findings.push(file);
+const outputDirectory = await mkdtemp(join(tmpdir(), "yiyi-secret-audit-"));
+try {
+  const result = await buildReleaseArchive({ outputPath: join(outputDirectory, "verified-release.tgz") });
+  console.log(`Verified allowlist staging and extracted archive (${result.files} files); no forbidden paths or secret material found.`);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+} finally {
+  await rm(outputDirectory, { recursive: true, force: true });
 }
-if (findings.length) {
-  console.error(`Potential secret material in tracked files: ${findings.join(", ")}`);
-  process.exit(1);
-}
-console.log("No potential secret material in tracked files.");

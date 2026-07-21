@@ -1,0 +1,54 @@
+{
+  "manifestVersion": "1.0",
+  "assetSet": {
+    "id": "yiyi-style-calibration-direction-tracks-v3",
+    "version": "v3",
+    "generatedOn": "2026-07-21",
+    "generator": "OpenAI built-in imagegen",
+    "purpose": "Direction-aware controlled pairwise calibration presentation",
+    "canonicalSemantics": "Question IDs, canonical A/B option IDs and style vectors remain catalog v2; only the presentation asset changes.",
+    "thirdPartyReferenceContent": false
+  },
+  "tracks": {
+    "womenswear": {
+      "presentation": "faceless feminine-proportioned matte-white mannequins with non-sexualized womenswear cuts",
+      "assets": {
+        "pair-relaxed-polished.webp": "3bd6720214621b8ce586074ecaa20a0e7ffdfba182ec3efc179cdd6a0266f0af",
+        "pair-minimal-expressive.webp": "cdc020bf3d9f5fccbb5f903216000c93a652a162d2f9a39067089c3fa2b261fe",
+        "pair-soft-utility.webp": "729b601dbf0989dfb913a8f322bed5afa9672f86e01fb76367d19cabcebfa8dc",
+        "pair-fitted-oversized.webp": "f9e0dddc4603d236e48f69257041a3c6562bd3bced0f6f63e47911480e022eac",
+        "pair-classic-trend.webp": "e20496801df46ebd56607a14a3b525d2ecd2f4e5a060779fa5566282effc1b2f",
+        "pair-tonal-graphic.webp": "ee2720475325a7592f1e876dfaf82749edd510a4fb04cac6d0b958685592d12e"
+      }
+    },
+    "neutral": {
+      "presentation": "faceless androgynous matte-white mannequins with neutral proportions and unisex garment cuts",
+      "assets": {
+        "pair-relaxed-polished.webp": "7c0fbecc2e4b572cace8ecd062bf46b043a859471c2f47f649a7594d4d20650a",
+        "pair-minimal-expressive.webp": "c7540181d1c46914a32af9b9415dacfcdcec83f3f91c3a24c93110d68ee7304c",
+        "pair-soft-utility.webp": "77cece7b398e55696c7bcd4f021211a9a24a4f002cd023079f888de7e0f9672d",
+        "pair-fitted-oversized.webp": "49a9066e858844c2722b551c94b6e66d36cfde2496ba845d6ff417f9d9e9c7eb",
+        "pair-classic-trend.webp": "ecb67d80881f93c250525e108a13fb1ee777df014487c6ec58b31705faf69e31",
+        "pair-tonal-graphic.webp": "777aedbd33252af37ae3b98ea1deffd6828b3c797be2a5eb2ab1d252612329b0"
+      }
+    }
+  },
+  "sharedControls": {
+    "dimensions": "1254x1254",
+    "mimeType": "image/webp",
+    "layout": "split_left_right",
+    "canonicalLeft": "optionA",
+    "canonicalRight": "optionB",
+    "background": "controlled warm light-gray studio",
+    "fullOutfitIncludingShoes": true,
+    "visibleBrandMarks": false,
+    "humanReview": "reviewed for concept direction, left-right mapping, full-outfit crop and obvious brand/text artifacts"
+  },
+  "knownBiasFlags": [
+    "single-synthetic-render-per-concept-and-track",
+    "mannequin-body-proportion-bias",
+    "western-contemporary-wardrobe-bias",
+    "synthetic-image-artifact-bias",
+    "style-axis-covaries-with-garment-details"
+  ]
+}

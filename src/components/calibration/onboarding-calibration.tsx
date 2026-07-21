@@ -5,7 +5,7 @@ import { ArrowLeft, RotateCcw } from "lucide-react";
 import { AnimatePresence, LayoutGroup, motion, useReducedMotionConfig } from "motion/react";
 import { YiYiMark } from "@/components/brand/yiyi-mark";
 import { PrimaryButton, SecondaryButton } from "@/components/ui/buttons";
-import { calibrationCatalogV2 } from "@/domain/preferences/calibration-catalog";
+import { calibrationAssetForDirection, calibrationCatalogV2 } from "@/domain/preferences/calibration-catalog";
 import {
   createCalibrationResponse,
   deriveCalibrationModel,
@@ -72,6 +72,7 @@ export function removeLastCalibrationAnswer(responses: readonly CalibrationRespo
 }
 
 type OnboardingCalibrationProps = {
+  direction: WardrobeDirection;
   questionIndex: number;
   responses: CalibrationResponse[];
   onQuestionIndexChange: (index: number) => void;
@@ -81,6 +82,7 @@ type OnboardingCalibrationProps = {
 };
 
 export function OnboardingCalibration({
+  direction,
   questionIndex,
   responses,
   onQuestionIndexChange,
@@ -90,6 +92,7 @@ export function OnboardingCalibration({
 }: OnboardingCalibrationProps) {
   const reduceMotion = useReducedMotionConfig();
   const question = calibrationCatalogV2.questions[questionIndex];
+  const presentationAsset = calibrationAssetForDirection(question, direction, questionIndex);
   const currentResponse = responses.find((response) => response.questionId === question.id);
   const currentChoice = currentResponse?.choice;
   // The catalog IDs remain canonical persisted values. Formal onboarding uses a
@@ -148,7 +151,7 @@ export function OnboardingCalibration({
             className={styles.boardImage}
             data-source-option={canonicalId}
             data-presentation-position={position === 0 ? "left" : "right"}
-            src={question.asset.src}
+            src={presentationAsset.src}
             alt={position === 0 ? presentationAlt : ""}
             fill
             sizes="(max-width: 480px) calc(100vw - 40px), 390px"

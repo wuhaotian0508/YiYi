@@ -21,10 +21,11 @@ describe("VoiceTurnController", () => {
     expect(muted.at(-1)).toBe(true);
   });
 
-  it("commits a listening turn once and interrupts speaking back to listening", () => {
+  it("commits once and keeps the microphone muted until interrupted audio actually stops", () => {
     const commit = vi.fn();
     const interrupt = vi.fn();
-    const controller = new VoiceTurnController({ publish: vi.fn(), setMicrophoneMuted: vi.fn() });
+    const muted: boolean[] = [];
+    const controller = new VoiceTurnController({ publish: vi.fn(), setMicrophoneMuted: (value) => muted.push(value) });
     controller.connected();
 
     expect(controller.primaryAction({ commit, interrupt })).toBe("commit");
@@ -35,7 +36,12 @@ describe("VoiceTurnController", () => {
     controller.audioStarted();
     expect(controller.primaryAction({ commit, interrupt })).toBe("interrupt");
     expect(interrupt).toHaveBeenCalledOnce();
+    expect(controller.state).toBe("interrupted");
+    expect(muted.at(-1)).toBe(true);
+
+    controller.audioStopped();
     expect(controller.state).toBe("listening");
+    expect(muted.at(-1)).toBe(false);
   });
 
   it("keeps error and listening mutually exclusive", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calibrationCatalogV2, type CalibrationCatalog } from "@/domain/preferences/calibration-catalog";
+import { calibrationAssetForDirection, calibrationCatalogV2, type CalibrationCatalog } from "@/domain/preferences/calibration-catalog";
 import {
   CalibrationContractError,
   buildCalibrationPreferenceProfile,
@@ -32,8 +32,19 @@ describe("pairwise style calibration", () => {
     expect(new Set(calibrationCatalogV2.questions.map((question) => question.id)).size).toBe(6);
     for (const question of calibrationCatalogV2.questions) {
       expect(question.asset.src).toMatch(/^\/style-calibration\/v2\/.+\.webp$/);
+      expect(question.directionAssets.womenswear.src).toMatch(/^\/style-calibration\/v3\/womenswear\/.+\.webp$/);
+      expect(question.directionAssets.neutral.src).toMatch(/^\/style-calibration\/v3\/neutral\/.+\.webp$/);
       expect(question.optionA.id).not.toBe(question.optionB.id);
     }
+  });
+
+  it("keeps neutral independent and balances Mixed deterministically", () => {
+    const assets = calibrationCatalogV2.questions.map((question, index) => ({
+      neutral: calibrationAssetForDirection(question, "neutral", index).src,
+      mixed: calibrationAssetForDirection(question, "mixed", index).src,
+    }));
+    expect(assets.every(({ neutral }) => neutral.includes("/v3/neutral/"))).toBe(true);
+    expect(assets.map(({ mixed }) => mixed.includes("/womenswear/") ? "w" : "m")).toEqual(["w", "m", "w", "m", "w", "m"]);
   });
 
   it("treats an A/B loser as unknown relative evidence, never as Less of", () => {

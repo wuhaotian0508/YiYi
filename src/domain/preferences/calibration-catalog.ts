@@ -17,15 +17,25 @@ const CalibrationOptionSchema = z.object({
   styleTags: z.array(z.string().trim().min(1).max(40)).min(1).max(8),
 }).strict();
 
+const CalibrationAssetSchema = z.object({
+  src: z.string().regex(/^\/style-calibration\/(?:v2|v3\/(?:womenswear|neutral))\/.+\.webp$/),
+  width: z.literal(1254),
+  height: z.literal(1254),
+  layout: z.literal("split_left_right"),
+}).strict();
+
 const CalibrationQuestionSchema = z.object({
   id: z.string().min(1).max(80),
   prompt: z.string().min(1).max(120),
   primaryAxis: StyleAxisSchema,
-  asset: z.object({
-    src: z.string().startsWith("/style-calibration/v2/").endsWith(".webp"),
-    width: z.literal(1254),
-    height: z.literal(1254),
-    layout: z.literal("split_left_right"),
+  // `asset` remains the v2 menswear-compatible path for stored catalog-v2
+  // provenance. Runtime presentation chooses one of the canonical visual
+  // tracks without changing question IDs, options, or style vectors.
+  asset: CalibrationAssetSchema,
+  directionAssets: z.object({
+    womenswear: CalibrationAssetSchema,
+    menswear: CalibrationAssetSchema,
+    neutral: CalibrationAssetSchema,
   }).strict(),
   optionA: CalibrationOptionSchema,
   optionB: CalibrationOptionSchema,
@@ -55,6 +65,7 @@ export type CalibrationCatalog = z.infer<typeof CalibrationCatalogSchema>;
 export type CalibrationQuestion = CalibrationCatalog["questions"][number];
 export type CalibrationOption = CalibrationQuestion["optionA"];
 export type StyleAxis = z.infer<typeof StyleAxisSchema>;
+export type CalibrationAsset = CalibrationQuestion["asset"];
 
 const zero: StyleVector = {
   relaxedPolished: 0,
@@ -64,6 +75,28 @@ const zero: StyleVector = {
   classicTrendAware: 0,
   feminineNeutral: 0,
 };
+
+function directionAssets(filename: string) {
+  const asset = (src: string): CalibrationAsset => ({ src, width: 1254, height: 1254, layout: "split_left_right" });
+  return {
+    womenswear: asset(`/style-calibration/v3/womenswear/${filename}`),
+    menswear: asset(`/style-calibration/v2/${filename}`),
+    neutral: asset(`/style-calibration/v3/neutral/${filename}`),
+  };
+}
+
+export function calibrationAssetForDirection(
+  question: CalibrationQuestion,
+  direction: "womenswear" | "menswear" | "mixed" | "neutral",
+  questionIndex: number,
+) {
+  if (direction === "mixed") {
+    // Deterministic alternation prevents refresh/back navigation from changing
+    // a comparison while keeping the track balanced over the six questions.
+    return questionIndex % 2 === 0 ? question.directionAssets.womenswear : question.directionAssets.menswear;
+  }
+  return question.directionAssets[direction];
+}
 
 /**
  * Version 2 deliberately measures outfits rather than model or photography
@@ -88,6 +121,7 @@ export const calibrationCatalogV2: CalibrationCatalog = CalibrationCatalogSchema
       prompt: "Which feels more like something you would actually wear?",
       primaryAxis: "relaxedPolished",
       asset: { src: "/style-calibration/v2/pair-relaxed-polished.webp", width: 1254, height: 1254, layout: "split_left_right" },
+      directionAssets: directionAssets("pair-relaxed-polished.webp"),
       optionA: {
         id: "relaxed-everyday",
         label: "Relaxed everyday",
@@ -106,6 +140,7 @@ export const calibrationCatalogV2: CalibrationCatalog = CalibrationCatalogSchema
       prompt: "Which feels more like something you would actually wear?",
       primaryAxis: "minimalExpressive",
       asset: { src: "/style-calibration/v2/pair-minimal-expressive.webp", width: 1254, height: 1254, layout: "split_left_right" },
+      directionAssets: directionAssets("pair-minimal-expressive.webp"),
       optionA: {
         id: "minimal-monochrome",
         label: "Minimal monochrome",
@@ -124,6 +159,7 @@ export const calibrationCatalogV2: CalibrationCatalog = CalibrationCatalogSchema
       prompt: "Which feels more like something you would actually wear?",
       primaryAxis: "softCool",
       asset: { src: "/style-calibration/v2/pair-soft-utility.webp", width: 1254, height: 1254, layout: "split_left_right" },
+      directionAssets: directionAssets("pair-soft-utility.webp"),
       optionA: {
         id: "soft-fluid-layers",
         label: "Soft fluid layers",
@@ -142,6 +178,7 @@ export const calibrationCatalogV2: CalibrationCatalog = CalibrationCatalogSchema
       prompt: "Which silhouette feels more like you?",
       primaryAxis: "fittedOversized",
       asset: { src: "/style-calibration/v2/pair-fitted-oversized.webp", width: 1254, height: 1254, layout: "split_left_right" },
+      directionAssets: directionAssets("pair-fitted-oversized.webp"),
       optionA: {
         id: "fitted-streamlined",
         label: "Fitted and streamlined",
@@ -160,6 +197,7 @@ export const calibrationCatalogV2: CalibrationCatalog = CalibrationCatalogSchema
       prompt: "Which feels more like something you would actually wear?",
       primaryAxis: "classicTrendAware",
       asset: { src: "/style-calibration/v2/pair-classic-trend.webp", width: 1254, height: 1254, layout: "split_left_right" },
+      directionAssets: directionAssets("pair-classic-trend.webp"),
       optionA: {
         id: "classic-layering",
         label: "Classic layering",
@@ -178,6 +216,7 @@ export const calibrationCatalogV2: CalibrationCatalog = CalibrationCatalogSchema
       prompt: "Which surface treatment feels more like you?",
       primaryAxis: "minimalExpressive",
       asset: { src: "/style-calibration/v2/pair-tonal-graphic.webp", width: 1254, height: 1254, layout: "split_left_right" },
+      directionAssets: directionAssets("pair-tonal-graphic.webp"),
       optionA: {
         id: "quiet-tonal",
         label: "Quiet tonal",

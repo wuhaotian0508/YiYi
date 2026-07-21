@@ -109,7 +109,12 @@ export class BrowserPreferenceVoiceAdapter implements VoiceSessionAdapter {
       this.emitState("understanding");
     };
     recognition.onerror = () => { this.emitFailure(new VoiceConnectionFailure({ stage: "permission", code: "SPEECH_RECOGNITION_FAILED" })); this.emitState("recoverable_error"); };
-    recognition.onend = () => { if (!this.intentionalStop && !this.receivedFinalResult) { this.emitFailure(new VoiceConnectionFailure({ stage: "session", code: "SPEECH_RECOGNITION_ENDED" })); this.emitState("recoverable_error"); } };
+    recognition.onend = () => {
+      if (this.receivedFinalResult) return;
+      const code = this.intentionalStop ? "EMPTY_TRANSCRIPT" : "SPEECH_RECOGNITION_ENDED";
+      this.emitFailure(new VoiceConnectionFailure({ stage: "session", code }));
+      this.emitState("recoverable_error");
+    };
     this.recognition = recognition;
     try { recognition.start(); }
     catch { this.recognition = null; throw new VoiceConnectionFailure({ stage: "permission", code: "MICROPHONE_START_FAILED" }); }
@@ -131,6 +136,16 @@ export class BrowserPreferenceVoiceAdapter implements VoiceSessionAdapter {
   }
 
   mute() {}
+  commitTurn() {
+    if (!this.recognition || this.receivedFinalResult) return;
+    this.intentionalStop = true;
+    this.emitState("committing");
+    try { this.recognition.stop(); }
+    catch {
+      this.emitFailure(new VoiceConnectionFailure({ stage: "session", code: "TURN_COMMIT_FAILED" }));
+      this.emitState("recoverable_error");
+    }
+  }
   onState(listener: (state: VoiceState) => void) { this.stateListeners.add(listener); return () => this.stateListeners.delete(listener); }
   onTranscript(listener: (transcript: TranscriptState) => void) { this.transcriptListeners.add(listener); return () => this.transcriptListeners.delete(listener); }
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failureListeners.add(listener); return () => this.failureListeners.delete(listener); }

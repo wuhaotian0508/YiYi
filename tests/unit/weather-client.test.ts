@@ -34,11 +34,18 @@ describe("device weather client", () => {
     const result = await fetchConfiguredWeather(fetcher, geolocation("allow"));
 
     expect(result).toMatchObject({ weather, source: "open-meteo" });
-    expect(String(vi.mocked(fetcher).mock.calls[0]?.[0])).toContain("latitude=37.77&longitude=-122.42");
+    expect(String(vi.mocked(fetcher).mock.calls[0]?.[0])).toBe("/api/weather");
+    expect(vi.mocked(fetcher).mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+    expect(JSON.parse(String(vi.mocked(fetcher).mock.calls[0]?.[1]?.body))).toEqual({ latitude: 37.77, longitude: -122.42 });
     const stored = await db.appSettings.get("weatherState");
     expect(String(stored?.value)).not.toContain("37.77");
     expect(String(stored?.value)).not.toContain("-122.42");
     expect(await getStoredWeatherState()).toMatchObject({ permission: "granted", source: "open-meteo", weather });
+  });
+
+  it("discards legacy Demo weather when the configured mode is device location", async () => {
+    await db.appSettings.put({ key: "weatherState", value: JSON.stringify({ permission: "not-requested", source: "fixed-demo", fetchedAt: Date.now(), weather: { ...weather, summary: "58° · Light rain" }, errorCode: null }) });
+    expect(await getStoredWeatherState()).toMatchObject({ source: null, weather: null, permission: "not-requested" });
   });
 
   it("records denial without calling the provider or silently substituting Demo", async () => {

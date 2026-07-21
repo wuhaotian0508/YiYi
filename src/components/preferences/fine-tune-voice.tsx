@@ -10,7 +10,7 @@ import { BrowserPreferenceVoiceAdapter, interpretMockPreferenceTranscript } from
 import { OpenAIRealtimeVoiceAdapter, VoiceConnectionFailure, type VoiceSessionAdapter, type VoiceToolHandlers } from "@/lib/realtime/voice-session";
 import { voiceSessionCoordinator, voiceSessionServerSnapshot, type VoiceSessionCoordinator } from "@/lib/realtime/voice-session-coordinator";
 
-type FineTuneStatus = "idle" | "connecting" | "listening" | "understanding" | "saving" | "done" | "error";
+type FineTuneStatus = "idle" | "connecting" | "listening" | "committing" | "understanding" | "speaking" | "saving" | "done" | "error";
 type FineTuneVoiceMode = "live" | "mock";
 
 export type FineTuneAdapterFactory = (input: {
@@ -52,7 +52,9 @@ function errorCopy(input: { stage: string | null; code: string | null; persisten
 function statusCopy(status: FineTuneStatus, failure: ReturnType<typeof errorCopy>, doneMessage: string) {
   if (status === "connecting") return "Starting voice…";
   if (status === "listening") return "Listening…";
+  if (status === "committing") return "Finishing your thought…";
   if (status === "understanding") return "Understanding…";
+  if (status === "speaking") return "YiYi is speaking — tap to interrupt";
   if (status === "saving") return "Saving preference…";
   if (status === "done") return doneMessage;
   if (status === "error") return failure;
@@ -209,11 +211,25 @@ export function FineTuneVoice({
     }
   }
 
+  function primaryAction() {
+    if (snapshot.owner === "fine-tune" && snapshot.status === "listening") {
+      coordinator.commitTurn("fine-tune");
+      return;
+    }
+    if (snapshot.owner === "fine-tune" && snapshot.status === "speaking") {
+      coordinator.interruptAndListen("fine-tune");
+      return;
+    }
+    void start();
+  }
+
   let status: FineTuneStatus = "idle";
   if (outcome !== "idle") status = outcome;
   else if (snapshot.owner === "fine-tune") {
     if (snapshot.status === "connecting") status = "connecting";
-    else if (["committing", "understanding", "tool_running", "revising", "speaking"].includes(snapshot.status)) status = "understanding";
+    else if (snapshot.status === "committing") status = "committing";
+    else if (snapshot.status === "speaking") status = "speaking";
+    else if (["understanding", "tool_running", "revising"].includes(snapshot.status)) status = "understanding";
     else if (snapshot.status === "listening" || snapshot.status === "interrupted") status = "listening";
     else if (snapshot.status === "recoverable_error" || snapshot.status === "rate_limited") status = "error";
   }
@@ -232,9 +248,9 @@ export function FineTuneVoice({
         type="button"
         className="preference-mic"
         data-state={status}
-        disabled={status === "saving" || status === "connecting"}
-        onClick={() => void start()}
-        aria-label={status === "error" ? "Retry voice preference" : "Tell YiYi another preference"}
+        disabled={status === "saving" || status === "connecting" || status === "committing" || status === "understanding"}
+        onClick={primaryAction}
+        aria-label={status === "listening" ? "Done speaking" : status === "speaking" ? "Interrupt YiYi" : status === "error" ? "Retry voice preference" : "Tell YiYi another preference"}
         whileTap={reduceMotion ? undefined : { transform: "scale(.94)" }}
         animate={reduceMotion || (status !== "listening" && status !== "understanding")
           ? { transform: "scale(1)" }

@@ -57,6 +57,9 @@ const sdk = vi.hoisted(() => {
 });
 
 vi.mock("@openai/agents/realtime", () => ({
+  OpenAIRealtimeWebRTC: class FakeRealtimeWebRTC {
+    connectionState = { status: "disconnected" as const, peerConnection: undefined, dataChannel: undefined, callId: undefined };
+  },
   RealtimeAgent: class FakeRealtimeAgent {
     constructor(input: Record<string, unknown>) {
       Object.assign(this, input);
@@ -116,28 +119,18 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     const tools = createRealtimeVoiceTools({ ...handlers, requestRecommendation }, "today");
     const recommendationTool = tools.find((candidate) => (candidate as { name?: string }).name === "request_outfit_recommendation") as unknown as { execute(value: unknown): Promise<unknown>; errorFunction(context: unknown, error: unknown): unknown };
 
-    await recommendationTool.execute({ freeformSummary: "Hiking, then dinner, with my navy hoodie." });
-    expect(requestRecommendation).toHaveBeenCalledWith(expect.objectContaining({
-      activities: [],
-      aestheticTerms: [],
-      excludedCategories: [],
-      excludedItemIds: [],
-      requiredItemIds: [],
-      temporaryPreferences: [],
-      temporaryItemRules: [],
-      comfortPriority: 3,
-      photoPriority: 3,
-      walkingIntensity: 2,
-    }));
+    const request = { userRequest: "Hiking, then dinner, with my navy hoodie.", activityPhrases: ["hiking", "dinner"], desiredFeelings: [], exclusions: [], wardrobeAnchors: ["my navy hoodie"] };
+    await recommendationTool.execute(request);
+    expect(requestRecommendation).toHaveBeenCalledWith(request);
 
     let validationError: unknown;
-    try { await recommendationTool.execute({ freeformSummary: "" }); }
+    try { await recommendationTool.execute({ userRequest: "", activityPhrases: [], desiredFeelings: [], exclusions: [], wardrobeAnchors: [] }); }
     catch (error) { validationError = error; }
     expect(JSON.parse(String(recommendationTool.errorFunction(null, validationError)))).toMatchObject({
       success: false,
       failureStage: "tool",
       errorCode: "TOOL_ARGUMENTS_INVALID",
-      zodIssuePaths: ["freeformSummary"],
+      zodIssuePaths: ["userRequest"],
     });
   });
 
@@ -208,7 +201,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(session.options).toMatchObject({
       config: {
         toolChoice: "required",
-        audio: { input: { turnDetection: { type: "semantic_vad", eagerness: "auto", interruptResponse: false } } },
+        audio: { input: { turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
       },
     });
     expect((session.agent as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
@@ -227,6 +220,53 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(session.updateSessionConfig).not.toHaveBeenCalledWith({ toolChoice: "required" });
     session.emit("audio_stopped");
     expect(session.updateSessionConfig).toHaveBeenLastCalledWith({ toolChoice: "required" });
+  });
+
+  it("owns initial response creation and forces the only eligible recommendation tool", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    expect(session.requestResponse).toHaveBeenCalledOnce();
+    expect(session.requestResponse).toHaveBeenCalledWith(expect.objectContaining({
+      tool_choice: "required",
+      parallel_tool_calls: false,
+    }));
+
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    expect(session.requestResponse).toHaveBeenCalledOnce();
+  });
+
+  it("records safe response, output-item and function-argument lifecycle diagnostics", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, {
+      attemptId: crypto.randomUUID(),
+      sessionGeneration: 8,
+      purpose: "today",
+      requireInitialRecommendation: true,
+      diagnostic: (entry) => diagnostics.push(entry),
+    });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    session.emit("transport_event", { type: "session.updated", session: { tool_choice: "required", tools: [{ type: "function", name: "request_outfit_recommendation" }] } });
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("transport_event", { type: "response.created", response: { id: "resp-1", status: "in_progress" } });
+    session.emit("transport_event", { type: "response.output_item.added", response_id: "resp-1", output_index: 0, item: { id: "call-item", type: "function_call", name: "request_outfit_recommendation", call_id: "call-1", arguments: "" } });
+    session.emit("transport_event", { type: "response.function_call_arguments.done", response_id: "resp-1", item_id: "call-item", output_index: 0, call_id: "call-1", name: "request_outfit_recommendation", arguments: JSON.stringify({ userRequest: "Private transcript must not be logged" }) });
+    session.emit("transport_event", { type: "response.done", response: { id: "resp-1", status: "completed", output: [{ type: "function_call" }] } });
+
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: "ready", result: "success", effectiveToolChoice: "required", effectiveToolNames: ["request_outfit_recommendation"] }),
+      expect.objectContaining({ stage: "recommendation", result: "success", realtimeEvent: "response.created", responseId: "resp-1" }),
+      expect.objectContaining({ stage: "tool", result: "started", realtimeEvent: "response.output_item.added", outputItemType: "function_call", toolName: "request_outfit_recommendation" }),
+      expect.objectContaining({ stage: "tool", result: "success", realtimeEvent: "response.function_call_arguments.done", toolName: "request_outfit_recommendation", argumentBytes: expect.any(Number) }),
+      expect.objectContaining({ stage: "recommendation", result: "success", realtimeEvent: "response.done", responseStatus: "completed" }),
+    ]));
+    expect(JSON.stringify(diagnostics)).not.toContain("Private transcript");
   });
 
   it("does not switch runtime agents after a failed initial mutation", async () => {
@@ -253,6 +293,8 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     session.emit("audio_start");
     adapter.interruptAndListen?.();
     expect(session.interrupt).toHaveBeenCalledOnce();
+    expect(session.mute).toHaveBeenLastCalledWith(true);
+    session.emit("audio_interrupted");
     expect(session.mute).toHaveBeenLastCalledWith(false);
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
@@ -313,7 +355,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
     session.emit("agent_tool_start", {}, {}, recommendationTool, { toolCall: { callId: "call-1" } });
-    const result = await recommendationTool.execute({ freeformSummary: "Hiking and dinner." });
+    const result = await recommendationTool.execute({ userRequest: "Hiking and dinner.", activityPhrases: ["hiking", "dinner"], desiredFeelings: [], exclusions: [], wardrobeAnchors: [] });
     session.emit("agent_tool_end", {}, {}, recommendationTool, JSON.stringify(result), { toolCall: { callId: "call-1" } });
     session.emit("audio_stopped");
     await vi.advanceTimersByTimeAsync(15_000);
@@ -368,7 +410,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(states.at(-1)).not.toBe("listening");
 
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(failures).toEqual(["INITIAL_RECOMMENDATION_TIMEOUT"]);
+    expect(failures).toEqual(["REALTIME_RESPONSE_CREATE_TIMEOUT"]);
     expect(states.at(-1)).toBe("recoverable_error");
     vi.useRealTimers();
   });

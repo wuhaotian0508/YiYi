@@ -46,7 +46,12 @@ export class VoiceTurnController {
   }
 
   toolStarted(toolName: string) {
-    this.transition(toolName === "handle_outfit_turn" ? "revising" : "tool_running");
+    // Tool name alone does not reveal whether handle_outfit_turn is revise,
+    // random, undo, confirm, availability, or no_change. The owning product
+    // surface applies the parsed action; the low-level controller only reports
+    // that verified work is running.
+    void toolName;
+    this.transition("tool_running");
   }
 
   toolEnded(success: boolean) {
@@ -70,7 +75,6 @@ export class VoiceTurnController {
     if (this.current === "speaking") {
       actions.interrupt();
       this.transition("interrupted");
-      this.transition("listening");
       return "interrupt";
     }
     return "none";

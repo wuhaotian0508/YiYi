@@ -14,6 +14,21 @@ describe("API rate-limit guard", () => {
     expect(blocked.retryAfterSeconds).toBeGreaterThan(0);
   });
 
+  it("gives users behind one NAT independent session budgets while retaining an IP abuse ceiling", async () => {
+    const sharedIp = `school-wifi-${crypto.randomUUID()}`;
+    const first = new Request("http://localhost/api/test", { headers: { "x-forwarded-for": sharedIp, "x-yiyi-client-session": crypto.randomUUID() } });
+    const second = new Request("http://localhost/api/test", { headers: { "x-forwarded-for": sharedIp, "x-yiyi-client-session": crypto.randomUUID() } });
+    expect((await takeRateLimit(first, "nat-unit", 1, 60_000)).allowed).toBe(true);
+    expect((await takeRateLimit(second, "nat-unit", 1, 60_000)).allowed).toBe(true);
+    expect((await takeRateLimit(first, "nat-unit", 1, 60_000)).allowed).toBe(false);
+
+    let last = { allowed: true };
+    for (let index = 0; index < 20; index += 1) {
+      last = await takeRateLimit(new Request("http://localhost/api/test", { headers: { "x-forwarded-for": sharedIp, "x-yiyi-client-session": crypto.randomUUID() } }), "nat-unit", 1, 60_000);
+    }
+    expect(last.allowed).toBe(false);
+  });
+
   it("returns the standard Retry-After header when the token route is limited", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "mock");

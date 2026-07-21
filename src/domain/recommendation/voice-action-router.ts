@@ -51,12 +51,25 @@ function adjustmentFor(request: string) {
 
 function requestedAvailableItemIds(request: string, wardrobe: WardrobeItem[]) {
   const text = request.toLowerCase();
+  // Item identity requires explicit designation. Descriptive style and colour
+  // language alone ("more relaxed", "less blue") must never become an anchor.
+  if (!/\b(wear|use|keep|include)\b|\bwith my\b/.test(text)) return [];
+  if (/\b(no|not|without|avoid|exclude|don['’]?t want|less)\b/.test(text)) return [];
   const matches = wardrobe.filter((item) => {
     if (item.availability !== "available") return false;
-    const phrases = [item.subtype, item.primaryColor, `${item.primaryColor} ${item.subtype}`, ...item.styleTags].map((value) => value.toLowerCase());
+    const phrases = [item.subtype, `${item.primaryColor} ${item.subtype}`].map((value) => value.toLowerCase());
     return phrases.some((phrase) => phrase.length >= 4 && text.includes(phrase));
   });
   return matches.length === 1 ? [matches[0].id] : [];
+}
+
+function temporaryRulesFor(request: string) {
+  const text = request.toLowerCase();
+  const negative = /\b(less|no|not|without|avoid|exclude|don['’]?t want)\b/.test(text);
+  if (!negative) return [];
+  const color = ["black", "white", "gray", "beige", "brown", "navy", "blue", "green", "red", "pink", "purple", "yellow", "orange"]
+    .find((candidate) => new RegExp(`\\b${candidate}\\b`).test(text));
+  return color ? [{ key: "color" as const, value: color, polarity: "avoid" as const, strength: "soft" as const, categories: [], slots: [] }] : [];
 }
 
 export function voiceActionToIntentDelta(input: {
@@ -84,7 +97,7 @@ export function voiceActionToIntentDelta(input: {
     adjustments: { ...zeroAdjustments, ...adjustmentFor(request) },
     desiredStyleTags: [],
     undesiredStyleTags: [],
-    temporaryRules: [],
+    temporaryRules: temporaryRulesFor(request),
     rawUtterance: request,
     confidence: 1,
     ambiguity: [],

@@ -77,7 +77,8 @@ describe("Today live voice recovery", () => {
 
     render(<TodayPage />);
 
-    expect(await screen.findByRole("heading", { name: "“Hiking, then dinner.”" })).toBeVisible();
+    const transcript = await screen.findByRole("heading", { name: "“Hiking, then dinner.”" });
+    await waitFor(() => expect(transcript).toBeVisible());
     expect(screen.queryByText(/I found one for you/)).not.toBeInTheDocument();
   });
 });

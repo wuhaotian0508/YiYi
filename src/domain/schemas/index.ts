@@ -426,6 +426,18 @@ export const WeatherContextSchema = z.object({
   windy: z.boolean(),
   summary: z.string().max(80),
   sourceTimestamp: z.number(),
+  currentTemperatureC: z.number().optional(),
+  currentWeatherCode: z.number().int().min(0).max(99).optional(),
+  dailyHighC: z.number().optional(),
+  dailyLowC: z.number().optional(),
+  hourly: z.array(z.object({
+    timestamp: z.number(),
+    temperatureC: z.number(),
+    weatherCode: z.number().int().min(0).max(99),
+    precipitationProbability: z.number().min(0).max(100),
+  }).strict()).max(12).optional(),
+  timezone: z.string().min(1).max(80).optional(),
+  locationLabel: z.string().min(1).max(80).optional(),
 });
 
 export const OutfitRankingResultSchema = z.object({

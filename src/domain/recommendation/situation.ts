@@ -1,12 +1,13 @@
 import type { DailyIntent, OutfitSlot, WardrobeItem } from "@/domain/schemas";
 
 export type SlotPolicy = "required" | "optional" | "discouraged" | "forbidden";
-export type SituationKind = "everyday" | "court_sport" | "gym" | "running" | "hiking" | "lab" | "interview" | "wedding" | "rain_commute" | "walking";
+export type SituationKind = "everyday" | "court_sport" | "spectator_sport" | "gym" | "running" | "hiking" | "lab" | "interview" | "wedding" | "rain_commute" | "walking";
 
 export type SituationProfile = {
   kind: SituationKind;
   intensity: "low" | "moderate" | "high";
   slotPolicy: Record<OutfitSlot, SlotPolicy>;
+  segments: Array<{ label: string; timeOfDay: DailyIntent["activities"][number]["timeOfDay"]; kind: SituationKind }>;
 };
 
 const corePolicy: Record<OutfitSlot, SlotPolicy> = {
@@ -22,11 +23,28 @@ const corePolicy: Record<OutfitSlot, SlotPolicy> = {
 
 export function normalizeSituationProfile(intent: DailyIntent): SituationProfile {
   const text = `${intent.activities.map((activity) => activity.label).join(" ")} ${intent.freeformSummary}`.toLowerCase();
+  const kindFor = (value: string): SituationKind => {
+    const normalized = value.toLowerCase();
+    if (/\b(watch(?:ing)?|attend(?:ing)?|spectat(?:e|ing)|fan)\b[^.]{0,35}\bbasketball\b|\bbasketball\b[^.]{0,30}\b(watch(?:ing)?|fan)\b/.test(normalized)) return "spectator_sport";
+    if (/\bbasketball\b|\bvolleyball\b|\btennis\b|\bcourt sport\b/.test(normalized)) return "court_sport";
+    if (/\bgym\b|\bworkout\b|\bweight(?:s|lifting)?\b|\btraining session\b/.test(normalized)) return "gym";
+    if (/\brunning\b|\bjogging\b|\b5k\b|\bmarathon\b/.test(normalized)) return "running";
+    if (/\bhik(?:e|ing)\b|\btrail\b/.test(normalized)) return "hiking";
+    if (/\blab(?:oratory)?\b|\bchemistry practical\b/.test(normalized)) return "lab";
+    if (/\binterview\b/.test(normalized)) return "interview";
+    if (/\bwedding\b/.test(normalized)) return "wedding";
+    if (/\brain(?:y)? commute\b|\bcommut(?:e|ing)\b.*\brain\b|\brain\b.*\bcommut(?:e|ing)\b/.test(normalized)) return "rain_commute";
+    if (/\blots? of walking\b|\bwalking all day\b/.test(normalized)) return "walking";
+    return "everyday";
+  };
+  const segments = intent.activities.map((activity) => ({ ...activity, kind: kindFor(activity.label) }));
   const profile = (kind: SituationKind, intensity: SituationProfile["intensity"], overrides: Partial<Record<OutfitSlot, SlotPolicy>> = {}): SituationProfile => ({
     kind,
     intensity,
     slotPolicy: { ...corePolicy, ...overrides },
+    segments,
   });
+  if (/\b(watch(?:ing)?|attend(?:ing)?|spectat(?:e|ing)|fan)\b[^.]{0,35}\bbasketball\b|\bbasketball\b[^.]{0,30}\b(watch(?:ing)?|fan)\b/.test(text)) return profile("spectator_sport", "low");
   if (/\bbasketball\b|\bvolleyball\b|\btennis\b|\bcourt sport\b/.test(text)) return profile("court_sport", "high", { bag: "forbidden", jewelry: "forbidden", extraAccessory: "forbidden" });
   if (/\bgym\b|\bworkout\b|\bweight(?:s|lifting)?\b|\btraining session\b/.test(text)) return profile("gym", "high", { bag: "forbidden", jewelry: "forbidden", extraAccessory: "forbidden" });
   if (/\brunning\b|\bjogging\b|\b5k\b|\bmarathon\b/.test(text)) return profile("running", "high", { bag: "forbidden", jewelry: "forbidden", extraAccessory: "forbidden" });
