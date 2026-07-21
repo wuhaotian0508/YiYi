@@ -31,6 +31,10 @@ export type VoiceDiagnostic = {
   argumentBytes?: number;
   effectiveToolChoice?: string;
   effectiveToolNames?: string[];
+  requestId?: string;
+  effectiveVadType?: string;
+  effectiveCreateResponse?: boolean;
+  effectiveInterruptResponse?: boolean;
 };
 
 export function logVoiceDiagnostic(diagnostic: VoiceDiagnostic) {

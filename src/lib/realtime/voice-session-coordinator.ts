@@ -13,6 +13,7 @@ export type VoiceSessionSnapshot = {
   attemptId: string | null;
   retryAt: number | null;
   errorCode: string | null;
+  diagnosticId: string | null;
   latestUserTranscript: TranscriptState | null;
   latestAssistantCaption: TranscriptState | null;
 };
@@ -34,6 +35,7 @@ const initialSnapshot: VoiceSessionSnapshot = {
   attemptId: null,
   retryAt: null,
   errorCode: null,
+  diagnosticId: null,
   latestUserTranscript: null,
   latestAssistantCaption: null,
 };
@@ -115,12 +117,12 @@ export class VoiceSessionCoordinator {
       }),
       adapter.onFailure((failure) => {
         if (!this.isActive(active)) return;
-        this.publish({ ...this.snapshot, status: "recoverable_error", stage: failure.stage, errorCode: failure.code });
+        this.publish({ ...this.snapshot, status: "recoverable_error", stage: failure.stage, errorCode: failure.code, diagnosticId: failure.requestId ?? attemptId });
         this.record(active, failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, zodIssuePaths: failure.zodIssuePaths, httpStatus: failure.httpStatus, sdkConnectionStatus: "disconnected" });
         void this.closeRuntimeFailure(active);
       }),
     ];
-    this.publish({ owner, status: "connecting", stage: "token", generation, attemptId, retryAt: null, errorCode: null, latestUserTranscript: null, latestAssistantCaption: null });
+    this.publish({ owner, status: "connecting", stage: "token", generation, attemptId, retryAt: null, errorCode: null, diagnosticId: null, latestUserTranscript: null, latestAssistantCaption: null });
 
     const promise = adapter.connect().then(
       () => {
@@ -146,6 +148,7 @@ export class VoiceSessionCoordinator {
           stage: failure.stage,
           retryAt,
           errorCode: failure.code,
+          diagnosticId: failure.requestId ?? attemptId,
         });
         this.record(active, failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, zodIssuePaths: failure.zodIssuePaths, httpStatus: failure.httpStatus, sdkConnectionStatus: "disconnected" });
         throw failure;

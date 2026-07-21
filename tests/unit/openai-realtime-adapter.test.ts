@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sdk = vi.hoisted(() => {
+  const defaultEffectiveSession = () => ({
+    tool_choice: "required",
+    tools: [{ type: "function", name: "request_outfit_recommendation" }],
+    audio: { input: { turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
+  });
   const sessions: Array<{
     listeners: Map<string, Set<(...args: unknown[]) => void>>;
     transportListeners: Map<string, Set<(...args: unknown[]) => void>>;
@@ -21,7 +26,9 @@ const sdk = vi.hoisted(() => {
   class FakeRealtimeSession {
     readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
     readonly transportListeners = new Map<string, Set<(...args: unknown[]) => void>>();
-    connect = vi.fn(async () => undefined);
+    connect = vi.fn(async () => {
+      this.emit("transport_event", { type: "session.updated", session: sdk.effectiveSession ?? defaultEffectiveSession() });
+    });
     close = vi.fn();
     mute = vi.fn();
     interrupt = vi.fn();
@@ -53,7 +60,7 @@ const sdk = vi.hoisted(() => {
     emit(event: string, ...args: unknown[]) { this.listeners.get(event)?.forEach((listener) => listener(...args)); }
     emitTransport(event: string, ...args: unknown[]) { this.transportListeners.get(event)?.forEach((listener) => listener(...args)); }
   }
-  return { agents, sessions, FakeRealtimeSession };
+  return { agents, sessions, FakeRealtimeSession, effectiveSession: null as Record<string, unknown> | null };
 });
 
 vi.mock("@openai/agents/realtime", () => ({
@@ -82,6 +89,7 @@ const handlers: VoiceToolHandlers = {
 beforeEach(() => {
   sdk.agents.length = 0;
   sdk.sessions.length = 0;
+  sdk.effectiveSession = null;
   vi.restoreAllMocks();
 });
 
@@ -219,7 +227,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     ]);
     expect(session.updateSessionConfig).not.toHaveBeenCalledWith({ toolChoice: "required" });
     session.emit("audio_stopped");
-    expect(session.updateSessionConfig).toHaveBeenLastCalledWith({ toolChoice: "required" });
+    expect(session.updateSessionConfig).toHaveBeenLastCalledWith({ toolChoice: "auto" });
   });
 
   it("owns initial response creation and forces the only eligible recommendation tool", async () => {
@@ -229,6 +237,10 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     const session = sdk.sessions[0]!;
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    expect(session.requestResponse).not.toHaveBeenCalled();
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+    ]);
     expect(session.requestResponse).toHaveBeenCalledOnce();
     expect(session.requestResponse).toHaveBeenCalledWith(expect.objectContaining({
       tool_choice: "required",
@@ -236,7 +248,56 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     }));
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+    ]);
     expect(session.requestResponse).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a final transcript that arrives before speech_stopped and never reuses it for a later turn", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    session.emit("transport_event", { type: "input_audio_buffer.speech_started" });
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+    ]);
+    expect(session.requestResponse).not.toHaveBeenCalled();
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    expect(session.requestResponse).toHaveBeenCalledOnce();
+
+    const tool = { name: "request_outfit_recommendation" };
+    session.emit("agent_tool_start", {}, {}, tool, { toolCall: { callId: "call-1" } });
+    session.emit("agent_tool_end", {}, {}, tool, JSON.stringify({ success: true, summary: "Ready." }), { toolCall: { callId: "call-1" } });
+    session.emit("audio_stopped");
+
+    session.emit("transport_event", { type: "input_audio_buffer.speech_started" });
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+    ]);
+    expect(session.requestResponse).toHaveBeenCalledOnce();
+
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+      { itemId: "user-2", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Change the shoes." }] },
+    ]);
+    expect(session.requestResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses to listen when the acknowledged server session still owns response creation", async () => {
+    sdk.effectiveSession = {
+      tool_choice: "required",
+      tools: [{ type: "function", name: "request_outfit_recommendation" }],
+      audio: { input: { turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: true, interrupt_response: false } } },
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ requestId: crypto.randomUUID(), value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+
+    await expect(adapter.connect()).rejects.toMatchObject({ stage: "ready", code: "SESSION_CONFIG_MISMATCH" });
+    expect(sdk.sessions[0]?.requestResponse).not.toHaveBeenCalled();
   });
 
   it("records safe response, output-item and function-argument lifecycle diagnostics", async () => {
@@ -254,6 +315,9 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
 
     session.emit("transport_event", { type: "session.updated", session: { tool_choice: "required", tools: [{ type: "function", name: "request_outfit_recommendation" }] } });
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+    ]);
     session.emit("transport_event", { type: "response.created", response: { id: "resp-1", status: "in_progress" } });
     session.emit("transport_event", { type: "response.output_item.added", response_id: "resp-1", output_index: 0, item: { id: "call-item", type: "function_call", name: "request_outfit_recommendation", call_id: "call-1", arguments: "" } });
     session.emit("transport_event", { type: "response.function_call_arguments.done", response_id: "resp-1", item_id: "call-item", output_index: 0, call_id: "call-1", name: "request_outfit_recommendation", arguments: JSON.stringify({ userRequest: "Private transcript must not be logged" }) });
@@ -289,6 +353,10 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     adapter.commitTurn?.();
     expect(session.mute).toHaveBeenLastCalledWith(true);
     expect(session.sendEvent).toHaveBeenCalledWith({ type: "input_audio_buffer.commit" });
+    expect(session.requestResponse).not.toHaveBeenCalled();
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Change the shoes." }] },
+    ]);
     expect(session.requestResponse).toHaveBeenCalledOnce();
     session.emit("audio_start");
     adapter.interruptAndListen?.();
@@ -354,6 +422,9 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     const recommendationTool = (session.agent as { tools: Array<{ name: string; execute(input: unknown): Promise<unknown> }> }).tools[0]!;
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+    ]);
     session.emit("agent_tool_start", {}, {}, recommendationTool, { toolCall: { callId: "call-1" } });
     const result = await recommendationTool.execute({ userRequest: "Hiking and dinner.", activityPhrases: ["hiking", "dinner"], desiredFeelings: [], exclusions: [], wardrobeAnchors: [] });
     session.emit("agent_tool_end", {}, {}, recommendationTool, JSON.stringify(result), { toolCall: { callId: "call-1" } });
@@ -366,6 +437,10 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(session.updateAgent).toHaveBeenCalledTimes(1);
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+      { itemId: "user-2", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Keep it as it is." }] },
+    ]);
     const runtimeTool = (session.agent as { tools: Array<{ name: string }> }).tools.find((candidate) => candidate.name === "handle_outfit_turn")!;
     session.emit("agent_tool_start", {}, {}, runtimeTool, { toolCall: { callId: "call-2" } });
     session.emit("agent_tool_end", {}, {}, runtimeTool, JSON.stringify({ success: true, summary: "No change.", changedSlots: [], outfitVersionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }), { toolCall: { callId: "call-2" } });
@@ -410,7 +485,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(states.at(-1)).not.toBe("listening");
 
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(failures).toEqual(["REALTIME_RESPONSE_CREATE_TIMEOUT"]);
+    expect(failures).toEqual(["FINAL_USER_TRANSCRIPT_TIMEOUT"]);
     expect(states.at(-1)).toBe("recoverable_error");
     vi.useRealTimers();
   });
@@ -424,6 +499,9 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     const session = sdk.sessions[0]!;
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+    ]);
     session.emit("agent_tool_start", {}, {}, { name: "request_outfit_recommendation" }, { toolCall: { callId: "call-1" } });
     session.emit("transport_event", { type: "input_audio_buffer.speech_started" });
     session.emit("audio_stopped");

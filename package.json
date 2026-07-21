@@ -20,6 +20,7 @@
     "release:archive": "node scripts/build-release-archive.mjs",
     "audit:production": "pnpm audit --prod --audit-level high",
     "verify:sharp": "node scripts/verify-sharp-runtime.mjs",
+    "verify:realtime-tool": "node scripts/verify-realtime-tool-lifecycle.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {

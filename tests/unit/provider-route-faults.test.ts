@@ -49,7 +49,7 @@ describe("paid provider fault boundaries", () => {
       session: expect.objectContaining({
         audio: expect.objectContaining({
           input: expect.objectContaining({
-            turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: true, interrupt_response: false },
+            turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false },
           }),
         }),
       }),

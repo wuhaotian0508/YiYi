@@ -13,13 +13,14 @@ import { Garment } from "@/components/wardrobe/garment";
 import { VoiceCore } from "@/components/voice/voice-core";
 import { ItemImageSetSchema, WardrobeAnalysisSchema, WardrobeItemSchema, type WardrobeAnalysis, type WardrobeItem } from "@/domain/schemas";
 import { clothingCategories, colorHex, colorIds, colorLabels, commonMaterials } from "@/domain/taxonomy";
-import { db, getExperienceMode, pruneProcessingJobs, savePersonalWardrobeItem } from "@/lib/storage/db";
+import { db, getExperienceMode, getItemImageSet, pruneProcessingJobs, savePersonalWardrobeItem } from "@/lib/storage/db";
 import { demoWardrobe } from "@/mocks/wardrobe";
 import { calmSpring } from "@/lib/motion/tokens";
 import { canvasToBlob } from "@/lib/images/prepare-upload";
 import { ClientImagePreparationError, preprocessWardrobeImage } from "@/lib/images/client-preprocess";
 import { shouldRetryWardrobeProcessing, WardrobeProcessErrorResponseSchema, WardrobeProcessingError } from "@/lib/wardrobe/process-client";
 import { providerSessionHeaders } from "@/lib/api/client-session";
+import { createWardrobeLocalSaveDiagnostic, reportWardrobeLocalSaveFailure } from "@/lib/wardrobe/local-save-diagnostics";
 
 type Step = "choose" | "processing" | "review" | "error";
 type Sheet = "color" | "material" | "category" | null;
@@ -163,6 +164,8 @@ export default function AddWardrobePage() {
     setSaving(true);
     const requestId = crypto.randomUUID();
     let stage = "schema";
+    const completedStages: string[] = [];
+    let thumbnailBlob: Blob | null = null;
     try {
       const now = Date.now();
       const id = saveItemIdRef.current ?? crypto.randomUUID();
@@ -179,18 +182,22 @@ export default function AddWardrobePage() {
         lastWornAt: null,
       });
       recordLocalSave(requestId, stage, "success");
+      completedStages.push(stage);
       stage = "blob-copy";
       recordLocalSave(requestId, stage, "started");
-      const originalBlob = new Blob([await sourceBlob.arrayBuffer()], { type: sourceBlob.type || "image/webp" });
-      const storedCutoutBlob = new Blob([await cutoutBlob.arrayBuffer()], { type: cutoutBlob.type || "image/webp" });
+      const originalBlob = sourceBlob.slice(0, sourceBlob.size, sourceBlob.type || "image/webp");
+      const storedCutoutBlob = cutoutBlob.slice(0, cutoutBlob.size, cutoutBlob.type || "image/webp");
       recordLocalSave(requestId, stage, "success");
+      completedStages.push(stage);
       stage = "thumbnail";
       recordLocalSave(requestId, stage, "started");
       const generatedThumbnail = await makeThumbnail(storedCutoutBlob);
-      const thumbnailBlob = new Blob([await generatedThumbnail.arrayBuffer()], { type: generatedThumbnail.type || "image/webp" });
+      thumbnailBlob = generatedThumbnail.slice(0, generatedThumbnail.size, generatedThumbnail.type || "image/png");
       recordLocalSave(requestId, stage, "success", { outputMime: thumbnailBlob.type });
+      completedStages.push(stage);
       stage = "dimensions";
       const dimensions = await imageDimensions(storedCutoutBlob);
+      completedStages.push(stage);
       stage = "image-schema";
       const images = ItemImageSetSchema.parse({
         itemId: id,
@@ -204,20 +211,42 @@ export default function AddWardrobePage() {
       stage = "indexeddb-transaction";
       recordLocalSave(requestId, stage, "started");
       const result = await savePersonalWardrobeItem(item, images);
-      recordLocalSave(requestId, stage, "success", { alreadySaved: result.alreadySaved });
+      completedStages.push(stage);
+      stage = "indexeddb-readback";
+      const [storedItem, storedImages, mode] = await Promise.all([db.wardrobeItems.get(id), getItemImageSet(id), getExperienceMode()]);
+      if (!storedItem || !storedImages || !(storedImages.cutoutBlob instanceof Blob) || storedImages.cutoutBlob.size < 1 || !(storedImages.thumbnailBlob instanceof Blob) || storedImages.thumbnailBlob.size < 1 || mode !== "personal") {
+        throw new Error("WARDROBE_SAVE_READBACK_FAILED");
+      }
+      completedStages.push(stage);
+      recordLocalSave(requestId, stage, "success", { alreadySaved: result.alreadySaved, cleanupPending: result.cleanupPending, originalStored: result.originalStored });
       router.push("/wardrobe");
     } catch (saveError) {
       const id = saveItemIdRef.current;
       const [storedItem, storedImages, mode] = id
-        ? await Promise.all([db.wardrobeItems.get(id).catch(() => undefined), db.itemImages.get(id).catch(() => undefined), getExperienceMode().catch(() => null)])
+        ? await Promise.all([db.wardrobeItems.get(id).catch(() => undefined), getItemImageSet(id).catch(() => undefined), getExperienceMode().catch(() => null)])
         : [undefined, undefined, null];
-      if (storedItem && storedImages && mode === "personal") {
+      const recovered = storedItem && storedImages && mode === "personal"
+        && storedImages.cutoutBlob instanceof Blob && storedImages.cutoutBlob.size > 0
+        && storedImages.thumbnailBlob instanceof Blob && storedImages.thumbnailBlob.size > 0;
+      if (recovered) {
         recordLocalSave(requestId, "post-failure-check", "success", { recoveredCommittedRecord: true });
         router.push("/wardrobe");
         return;
       }
       const classified = classifyLocalSaveError(saveError, Boolean(storedItem) !== Boolean(storedImages));
-      recordLocalSave(requestId, stage, "error", { errorCode: classified.code, errorType: saveError instanceof Error ? saveError.name : typeof saveError });
+      const diagnostic = await createWardrobeLocalSaveDiagnostic({
+        requestId,
+        stage,
+        errorCode: classified.code,
+        error: saveError,
+        completedStages,
+        originalBlob: sourceBlob,
+        cutoutBlob,
+        thumbnailBlob,
+        databaseVersion: db.verno,
+      });
+      recordLocalSave(requestId, stage, "error", { errorCode: classified.code, errorType: diagnostic.errorName, innerErrorType: diagnostic.innerErrorName, blobMimes: diagnostic.blobs, storage: diagnostic.storage, databaseVersion: diagnostic.databaseVersion });
+      void reportWardrobeLocalSaveFailure(diagnostic);
       setError({ message: classified.message, requestId, code: classified.code, retryable: classified.retryable });
       setStep("error");
       setSaving(false);
@@ -258,12 +287,16 @@ export default function AddWardrobePage() {
 
 function classifyLocalSaveError(error: unknown, partialRecord: boolean) {
   if (partialRecord) return { code: "LOCAL_SAVE_PARTIAL_RECORD", message: "The item was not fully saved. Try again after reopening YiYi.", retryable: true };
-  if (error instanceof DOMException && ["QuotaExceededError", "NS_ERROR_DOM_QUOTA_REACHED"].includes(error.name)) {
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : null;
+  const inner = record && (record.inner ?? record.innerException);
+  const innerName = inner && typeof inner === "object" && "name" in inner ? String((inner as { name: unknown }).name) : "";
+  if ((error instanceof DOMException && ["QuotaExceededError", "NS_ERROR_DOM_QUOTA_REACHED"].includes(error.name)) || ["QuotaExceededError", "NS_ERROR_DOM_QUOTA_REACHED"].includes(innerName)) {
     return { code: "LOCAL_STORAGE_QUOTA_EXCEEDED", message: "This device does not have enough browser storage for the item.", retryable: false };
   }
   const message = error instanceof Error ? error.message : "";
   if (/thumbnail|image conversion/i.test(message)) return { code: "THUMBNAIL_GENERATION_FAILED", message: "YiYi could not prepare a saved preview for this image.", retryable: true };
   if (/schema|validation/i.test(message)) return { code: "LOCAL_ITEM_VALIDATION_FAILED", message: "One or more item details are invalid. Review them and try again.", retryable: true };
+  if (/READBACK_FAILED/i.test(message)) return { code: "LOCAL_SAVE_READBACK_FAILED", message: "The item did not pass YiYi’s local save check. Please try again.", retryable: true };
   return { code: "LOCAL_SAVE_FAILED", message: "This item could not be saved. Please try again.", retryable: true };
 }
 

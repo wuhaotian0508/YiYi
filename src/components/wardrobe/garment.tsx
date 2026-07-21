@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useLiveQuery } from "dexie-react-hooks";
 import { colorHex } from "@/domain/taxonomy";
 import type { WardrobeItem } from "@/domain/schemas";
-import { db } from "@/lib/storage/db";
+import { getItemImageSet } from "@/lib/storage/db";
 
 const spriteIndexById: Record<string, number> = {
   "11111111-1111-4111-8111-111111111111": 0,
@@ -32,7 +32,7 @@ const cleanDemoAssetById: Partial<Record<string, string>> = {
 };
 
 export function Garment({ item, className = "" }: { item: WardrobeItem; className?: string }) {
-  const imageSet = useLiveQuery(() => db.itemImages.get(item.id), [item.id]);
+  const imageSet = useLiveQuery(() => getItemImageSet(item.id), [item.id]);
   const [localSource, setLocalSource] = useState<string | null>(null);
   useEffect(() => {
     if (!imageSet?.thumbnailBlob) return;

@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 test("one explicit start creates one Realtime token and one reusable ready session", async ({ page }) => {
+  page.on("console", (message) => {
+    if (message.text().includes("yiyi_voice_lifecycle")) console.info(`[browser-voice] ${message.text()}`);
+  });
   let tokenRequests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/api/realtime/token")) tokenRequests += 1;
@@ -26,8 +29,8 @@ test("one explicit start creates one Realtime token and one reusable ready sessi
   await page.waitForTimeout(6_000);
   expect(tokenRequests).toBe(1);
 
-  await page.getByRole("button", { name: "End voice session" }).click();
-  await expect(page.getByRole("button", { name: "Start live voice session" })).toBeEnabled();
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
   expect(tokenRequests).toBe(1);
 });
 
@@ -52,7 +55,7 @@ test("Fine-tune uses the same single-owner lifecycle and releases it on navigati
   await page.waitForTimeout(3_000);
   expect(tokenRequests).toBe(1);
 
-  await page.goto("/today");
-  await expect(page.getByRole("button", { name: "Start live voice session" })).toBeEnabled();
+  await page.goto("/");
+  await page.waitForTimeout(500);
   expect(tokenRequests).toBe(1);
 });

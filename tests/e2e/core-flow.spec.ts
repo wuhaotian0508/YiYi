@@ -193,8 +193,7 @@ test("wardrobe search, availability, and visible preference editing work", async
   await expect(page.getByRole("region", { name: "Needs review" })).toContainText("neon colors");
 });
 
-test("mock image processing saves Blob-backed clothing", async ({ page, browserName }) => {
-  test.skip(browserName === "webkit", "Playwright WebKit cannot serialize Blob values into IndexedDB; real Safari remains a device test.");
+test("mock image processing saves and reloads Blob-backed clothing", async ({ page }) => {
   await page.goto("/wardrobe/add");
   const fixture = resolve(process.cwd(), "tests/fixtures/soft-jacket.webp");
   await page.locator('input[type="file"]').nth(1).setInputFiles(fixture);
@@ -204,6 +203,35 @@ test("mock image processing saves Blob-backed clothing", async ({ page, browserN
   await expect(page).toHaveURL(/\/wardrobe$/);
   await expect(page.getByText("Soft jacket")).toBeVisible();
   await expect(page.getByText("1 items")).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Soft jacket")).toBeVisible();
+  await expect(page.locator(".wardrobe-tile img")).toBeVisible();
+  const persisted = await page.evaluate(async () => {
+    const request = indexedDB.open("yiyi");
+    const database = await new Promise<IDBDatabase>((resolveDatabase, reject) => {
+      request.onsuccess = () => resolveDatabase(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction(["wardrobeItems", "itemImages"], "readonly");
+    const itemsRequest = transaction.objectStore("wardrobeItems").getAll();
+    const imagesRequest = transaction.objectStore("itemImages").getAll();
+    const [items, images] = await Promise.all([
+      new Promise<unknown[]>((resolveItems, reject) => { itemsRequest.onsuccess = () => resolveItems(itemsRequest.result); itemsRequest.onerror = () => reject(itemsRequest.error); }),
+      new Promise<Array<{ cutoutBlob?: { bytes?: ArrayBuffer }; thumbnailBlob?: { bytes?: ArrayBuffer }; originalBlob?: { bytes?: ArrayBuffer } }>>((resolveImages, reject) => { imagesRequest.onsuccess = () => resolveImages(imagesRequest.result); imagesRequest.onerror = () => reject(imagesRequest.error); }),
+    ]);
+    database.close();
+    return {
+      itemCount: items.length,
+      imageCount: images.length,
+      cutoutBytes: images[0]?.cutoutBlob?.bytes?.byteLength ?? 0,
+      thumbnailBytes: images[0]?.thumbnailBlob?.bytes?.byteLength ?? 0,
+      originalBytes: images[0]?.originalBlob?.bytes?.byteLength ?? 0,
+    };
+  });
+  expect(persisted).toMatchObject({ itemCount: 1, imageCount: 1 });
+  expect(persisted.cutoutBytes).toBeGreaterThan(0);
+  expect(persisted.thumbnailBytes).toBeGreaterThan(0);
+  expect(persisted.originalBytes).toBeGreaterThan(0);
 });
 
 test("mock image processing reaches a validated review on mobile engines", async ({ page }) => {

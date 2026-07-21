@@ -2,14 +2,25 @@ export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES = 4_000_000;
 
 export function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) {
-  return new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
-    if (blob) { resolve(blob); return; }
-    if (type !== "image/png") {
-      canvas.toBlob((fallback) => fallback ? resolve(fallback) : reject(new Error("Image conversion failed")), "image/png");
-      return;
-    }
-    reject(new Error("Image conversion failed"));
-  }, type, quality));
+  const attempts: Array<{ type: string; quality?: number }> = [
+    { type, quality },
+    ...(type === "image/png" ? [] : [{ type: "image/png" }]),
+    ...(type === "image/jpeg" ? [] : [{ type: "image/jpeg", quality: 0.88 }]),
+  ];
+  return new Promise<Blob>((resolve, reject) => {
+    const tryEncode = (index: number) => {
+      const attempt = attempts[index];
+      if (!attempt) { reject(new Error("Image conversion failed")); return; }
+      canvas.toBlob((blob) => {
+        if (blob && blob.size > 0 && ["image/webp", "image/png", "image/jpeg"].includes(blob.type)) {
+          resolve(blob);
+          return;
+        }
+        tryEncode(index + 1);
+      }, attempt.type, attempt.quality);
+    };
+    tryEncode(0);
+  });
 }
 
 function scaledCanvas(source: HTMLCanvasElement, scale: number) {

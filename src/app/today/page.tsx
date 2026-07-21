@@ -29,7 +29,7 @@ import { persistPreferenceDelta } from "@/lib/preferences/profile-storage";
 import { rankOutfits } from "@/lib/recommendation/client-ranking";
 import { RecommendationOperationController, runCommitPhase, type OperationToken } from "@/lib/recommendation/operation-controller";
 import { commitOutfitMutation, confirmOutfitMutation, resetInvalidOutfitSession, undoOutfitMutation, updateItemAvailabilityMutation } from "@/lib/recommendation/session-mutations";
-import { db, getSoundEnabled } from "@/lib/storage/db";
+import { db, getSoundEnabled, getWardrobeItemsForCurrentMode } from "@/lib/storage/db";
 import { configuredWeatherMode, fetchConfiguredWeather, getStoredWeatherState, resolveWeatherForSession, usableCachedWeather, type WeatherSource } from "@/lib/weather/client";
 
 type Phase = "idle" | "connecting" | "listening" | "understanding" | "generating" | "presenting" | "revising" | "paused" | "confirmed" | "error";
@@ -63,7 +63,8 @@ function voiceStatus(phase: Phase, voice: VoiceSessionSnapshot, action: VoiceTur
     if (voice.stage === "permission") return "Microphone access is needed · Tap to retry";
     if (voice.stage === "token") return "Voice access is unavailable · Tap to retry";
     if (voice.stage === "webrtc" || voice.stage === "ready") return "Voice connection failed · Tap to retry";
-    return "Voice didn’t start · Tap to retry";
+    const diagnostic = [voice.stage, voice.errorCode, voice.diagnosticId ? `ID ${voice.diagnosticId}` : null].filter(Boolean).join(" · ");
+    return diagnostic ? `Voice stopped · ${diagnostic} · Tap to retry` : "Voice stopped · Tap to retry";
   }
   if (voice.status === "connecting") return "Connecting…";
   if (voice.status === "committing") return "Finishing your turn…";
@@ -133,7 +134,7 @@ export function TodayPage() {
     void (async () => {
       configureSounds(await getSoundEnabled());
       const [items, sessions, cachedState] = await Promise.all([
-        db.wardrobeItems.toArray(),
+        getWardrobeItemsForCurrentMode(),
         db.dailySessions.where("dateKey").equals(localDateKey()).toArray(),
         getStoredWeatherState(),
       ]);
@@ -308,7 +309,7 @@ export function TodayPage() {
         operationControllerRef.current.finish(token);
         return { success: false as const, summary: "That voice session has already ended." };
       }
-      const items = await db.wardrobeItems.toArray();
+      const items = await getWardrobeItemsForCurrentMode();
       const profile = (await db.preferenceProfiles.get("default")) ?? createNeutralPreferenceProfile();
       failureStage = "recommendation";
       const decision = runRecommendationDecision({
@@ -417,7 +418,7 @@ export function TodayPage() {
     let token;
     try { token = operationControllerRef.current.begin(baseVersionId); } catch { return false; }
     try {
-      const [items, profile] = await Promise.all([db.wardrobeItems.toArray(), db.preferenceProfiles.get("default")]);
+      const [items, profile] = await Promise.all([getWardrobeItemsForCurrentMode(), db.preferenceProfiles.get("default")]);
       if (voiceGeneration !== undefined && !voiceSessionCoordinator.isCurrent("today", voiceGeneration)) {
         operationControllerRef.current.finish(token);
         return false;
@@ -449,7 +450,7 @@ export function TodayPage() {
     catch { return { success: false as const, summary: "I’m still finishing the previous outfit change." }; }
     try {
       const profile = (await db.preferenceProfiles.get("default")) ?? createNeutralPreferenceProfile();
-      const items = await db.wardrobeItems.toArray();
+      const items = await getWardrobeItemsForCurrentMode();
       const context = createRecommendationContext({ wardrobe: items, intent: intentRef.current, profile, weather: weatherRef.current, currentOutfit: outfit, operation: "initial" });
       assertDisplayedOutfitLegal(outfit, context);
       const updatedProfile = updateProfileFromOutfitFeedback({ profile, outfit, wardrobe: items, kind: "confirmed", intent: intentRef.current, contextId: sessionId });
@@ -626,7 +627,7 @@ export function TodayPage() {
             {(phase === "presenting" || phase === "revising") && current && <Result key="result" current={current} wardrobe={wardrobe} reason={reason} phase={phase} tags={tags} focusedSlot={focusedSlot} onFocus={setFocusedSlot} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }} onRevise={revise} onUndo={() => void undo()} canUndo={history.length > 0} onRandom={() => void randomizeOutfit()} onConfirm={() => void confirmCurrent()} />}
             {phase === "paused" && <Paused key="paused" current={current} wardrobe={wardrobe} />}
             {phase === "confirmed" && current && <Confirmed key="confirmed" current={current} wardrobe={wardrobe} onRevise={() => setPhase("presenting")} onOpenWardrobe={() => pagerRef.current?.slideTo(1)} />}
-            {phase === "error" && <ErrorState key="error" />}
+            {phase === "error" && <ErrorState key="error" voice={voiceSnapshot} />}
           </AnimatePresence>
         </div>
         <VoiceDock
@@ -703,8 +704,9 @@ function IntentTagSheet({ tag, value, onChange, onSave, onRemove }: { tag: Inten
   return <><h2>Edit today’s intent</h2><p className="secondary-copy">This changes today only and creates one refreshed answer.</p>{tag.kind !== "excluded" && <input className="sheet-input" aria-label="Intent tag" value={value} onChange={(event) => onChange(event.target.value)} />}<div className="sheet-actions"><SecondaryButton onClick={onRemove}>{tag.kind === "excluded" ? "Allow this today" : "Remove tag"}</SecondaryButton>{tag.kind !== "excluded" && <PrimaryButton disabled={!value.trim()} onClick={onSave}>Update outfit</PrimaryButton>}</div></>;
 }
 
-function ErrorState() {
-  return <MotionSection className="today-content error-state"><div><VoiceCore state="error" disabled /><h1>YiYi couldn’t finish that.</h1><p>Your wardrobe is safe. Tap the Voice Dock to try the session again.</p></div><div className="dock-spacer" /></MotionSection>;
+function ErrorState({ voice }: { voice: VoiceSessionSnapshot }) {
+  const diagnostic = [voice.stage, voice.errorCode, voice.diagnosticId ? `Diagnostic ID: ${voice.diagnosticId}` : null].filter(Boolean).join(" · ");
+  return <MotionSection className="today-content error-state"><div><VoiceCore state="error" disabled /><h1>YiYi couldn’t finish that.</h1><p>Your wardrobe is safe. Tap the Voice Dock to try the session again.</p>{diagnostic && <p className="secondary-copy">{diagnostic}</p>}</div><div className="dock-spacer" /></MotionSection>;
 }
 
 export default TodayPage;

@@ -9,14 +9,14 @@ import { Garment } from "@/components/wardrobe/garment";
 import { copy } from "@/content/copy";
 import type { WardrobeItem } from "@/domain/schemas";
 import { wardrobeFilterLabels } from "@/domain/taxonomy";
-import { db } from "@/lib/storage/db";
+import { getWardrobeItemsForCurrentMode } from "@/lib/storage/db";
 
 export function WardrobePanel({ embedded = false, onBack }: { embedded?: boolean; onBack?: () => void }) {
   const [items, setItems] = useState<WardrobeItem[]>([]);
   const [filter, setFilter] = useState<(typeof wardrobeFilterLabels)[number]>("All");
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
-  useEffect(() => { void db.wardrobeItems.toArray().then(setItems); }, []);
+  useEffect(() => { void getWardrobeItemsForCurrentMode().then(setItems); }, []);
   const filterCategory: Partial<Record<(typeof wardrobeFilterLabels)[number], WardrobeItem["category"]>> = { Tops: "top", Bottoms: "bottom", Outerwear: "outerwear", Shoes: "shoes" };
   const shown = items.filter((item) => {
     const filterMatch = filter === "All" || (filter === "Accessories" ? ["bag", "jewelry", "headwear", "scarf", "belt", "eyewear", "hair_accessory", "other_accessory"].includes(item.category) : item.category === filterCategory[filter]);

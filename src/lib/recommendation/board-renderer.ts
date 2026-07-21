@@ -1,5 +1,5 @@
 import type { Outfit, WardrobeItem } from "@/domain/schemas";
-import { db } from "@/lib/storage/db";
+import { getItemImageSet } from "@/lib/storage/db";
 
 const spriteIndexById: Record<string, number> = {
   "11111111-1111-4111-8111-111111111111": 0,
@@ -62,7 +62,7 @@ export async function renderCandidateBoard(outfit: Outfit, wardrobe: WardrobeIte
       if (!id) continue;
       if (!lookup.has(id)) throw new Error("BOARD_WARDROBE_ITEM_MISSING");
       const anchor = anchors[slot];
-      const localImage = await db.itemImages.get(id);
+      const localImage = await getItemImageSet(id);
       if (localImage?.cutoutBlob) {
         const loaded = await loadImage(localImage.cutoutBlob);
         context.drawImage(loaded.image, anchor.x, anchor.y, anchor.size, anchor.size);

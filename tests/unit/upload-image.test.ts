@@ -14,6 +14,20 @@ function fakeCanvas(sizes: number[]) {
 }
 
 describe("wardrobe image preparation", () => {
+  it("falls back to PNG when Safari cannot produce a usable WebP Blob", async () => {
+    const attempts: string[] = [];
+    const canvas = {
+      toBlob: (callback: BlobCallback, type?: string) => {
+        attempts.push(type ?? "");
+        callback(type === "image/webp" ? null : new Blob([new Uint8Array(12)], { type: type ?? "" }));
+      },
+    } as HTMLCanvasElement;
+
+    const { canvasToBlob } = await import("@/lib/images/prepare-upload");
+    await expect(canvasToBlob(canvas, "image/webp", 0.78)).resolves.toMatchObject({ type: "image/png", size: 12 });
+    expect(attempts).toEqual(["image/webp", "image/png"]);
+  });
+
   it("keeps reducing a detailed image until the encoded upload is under the client limit", async () => {
     const source = fakeCanvas([MAX_UPLOAD_BYTES + 100, MAX_UPLOAD_BYTES + 50]);
     const resized = fakeCanvas([MAX_UPLOAD_BYTES - 1]);

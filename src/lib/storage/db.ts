@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
-import type { DailySession, ItemImageSet, OutfitVersion, PreferenceProfile, PreferenceSignal, WardrobeItem } from "@/domain/schemas";
+import { ItemImageSetSchema, WardrobeItemSchema, type DailySession, type ItemImageSet, type OutfitVersion, type PreferenceProfile, type PreferenceSignal, type WardrobeItem } from "@/domain/schemas";
 import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
 import { rebuildProfileFromSignals } from "@/domain/preferences/profile-mutations";
 
@@ -7,6 +7,13 @@ const obsoleteDemoItemId = "11111111-1111-4111-8111-111111111112";
 
 export type AppSetting = { key: string; value: string | number | boolean };
 export type ProcessingJob = { id: string; status: "waiting" | "processing" | "failed" | "complete"; createdAt: number };
+type StoredImageBinary = { mime: string; bytes: ArrayBuffer };
+type StoredItemImageSet = Omit<ItemImageSet, "originalBlob" | "cutoutBlob" | "thumbnailBlob" | "cutoutMaskBlob"> & {
+  originalBlob?: Blob | StoredImageBinary;
+  cutoutBlob: Blob | StoredImageBinary;
+  thumbnailBlob: Blob | StoredImageBinary;
+  cutoutMaskBlob?: Blob | StoredImageBinary;
+};
 export type ExperienceMode = "demo" | "personal";
 export type OnboardingState = {
   status: "incomplete" | "complete";
@@ -19,6 +26,7 @@ const experienceModeKey = "experienceMode";
 const demoWardrobeSeededKey = "demoWardrobeSeeded";
 const demoItemIdsKey = "demoItemIds";
 const onboardingStateKey = "onboardingState";
+const personalCleanupPendingKey = "personalCleanupPending";
 const legacyOnboardingStorageKey = "yiyi:onboarding-complete";
 const incompleteOnboardingState: OnboardingState = { status: "incomplete", version: 1, completedAt: null, experienceMode: null };
 
@@ -264,7 +272,7 @@ function materializePersonalProfile(profile: PreferenceProfile) {
 
 export class YiYiDatabase extends Dexie {
   wardrobeItems!: EntityTable<WardrobeItem, "id">;
-  itemImages!: EntityTable<ItemImageSet, "itemId">;
+  itemImages!: EntityTable<StoredItemImageSet, "itemId">;
   preferenceProfiles!: EntityTable<PreferenceProfile, "id">;
   dailySessions!: EntityTable<DailySession, "id">;
   outfitVersions!: EntityTable<OutfitVersion, "id">;
@@ -359,6 +367,15 @@ export class YiYiDatabase extends Dexie {
       });
     });
     this.version(7).stores({
+      wardrobeItems: "&id, category, availability, lastWornAt, createdAt",
+      itemImages: "&itemId",
+      preferenceProfiles: "&id",
+      dailySessions: "&id, dateKey, status",
+      outfitVersions: "&id, sessionId, parentVersionId, createdAt",
+      appSettings: "&key",
+      processingJobs: "&id, status, createdAt",
+    });
+    this.version(8).stores({
       wardrobeItems: "&id, category, availability, lastWornAt, createdAt",
       itemImages: "&itemId",
       preferenceProfiles: "&id",
@@ -491,20 +508,46 @@ export async function setExperienceMode(mode: ExperienceMode, resetDemoSeed = fa
   });
 }
 
-/**
- * Persist one personal item, its image set, and the Demo→Personal mode change
- * in one IndexedDB transaction. Repeating the same item ID is idempotent only
- * when both records already exist; a half-record is treated as corruption.
- */
-export async function savePersonalWardrobeItem(item: WardrobeItem, images: ItemImageSet) {
-  if (item.id !== images.itemId) throw new Error("WARDROBE_IMAGE_ITEM_MISMATCH");
-  return db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
-    const [existingItem, existingImages] = await Promise.all([db.wardrobeItems.get(item.id), db.itemImages.get(item.id)]);
-    if (existingItem || existingImages) {
-      if (existingItem && existingImages) return { itemId: item.id, alreadySaved: true };
-      throw new Error("PARTIAL_WARDROBE_RECORD");
-    }
+function isStoredImageBinary(value: unknown): value is StoredImageBinary {
+  return Boolean(value && typeof value === "object" && "mime" in value && typeof (value as { mime?: unknown }).mime === "string" && "bytes" in value && (value as { bytes?: unknown }).bytes instanceof ArrayBuffer);
+}
 
+async function encodeStoredImage(blob: Blob): Promise<StoredImageBinary> {
+  return { mime: blob.type, bytes: await blob.arrayBuffer() };
+}
+
+function decodeStoredImage(value: Blob | StoredImageBinary | undefined) {
+  if (!value) return undefined;
+  if (value instanceof Blob) return value;
+  if (!isStoredImageBinary(value)) throw new Error("WARDROBE_IMAGE_BINARY_INVALID");
+  return new Blob([value.bytes], { type: value.mime });
+}
+
+export async function getItemImageSet(itemId: string) {
+  const stored = await db.itemImages.get(itemId);
+  if (!stored) return undefined;
+  return ItemImageSetSchema.parse({
+    ...stored,
+    originalBlob: decodeStoredImage(stored.originalBlob),
+    cutoutBlob: decodeStoredImage(stored.cutoutBlob),
+    thumbnailBlob: decodeStoredImage(stored.thumbnailBlob),
+    cutoutMaskBlob: decodeStoredImage(stored.cutoutMaskBlob),
+  });
+}
+
+export async function verifyPersonalWardrobeItemSave(itemId: string) {
+  const [storedItem, storedImages] = await Promise.all([db.wardrobeItems.get(itemId), getItemImageSet(itemId)]);
+  const item = WardrobeItemSchema.safeParse(storedItem);
+  const images = ItemImageSetSchema.safeParse(storedImages);
+  if (!item.success) throw new Error("WARDROBE_ITEM_READBACK_FAILED");
+  if (!images.success) throw new Error("WARDROBE_IMAGES_READBACK_FAILED");
+  if (images.data.itemId !== itemId) throw new Error("WARDROBE_IMAGE_ID_READBACK_FAILED");
+  if (images.data.cutoutBlob.size < 1 || images.data.thumbnailBlob.size < 1) throw new Error("WARDROBE_BLOB_READBACK_FAILED");
+  return { item: item.data, images: images.data };
+}
+
+export async function finalizePersonalWardrobeMigration() {
+  return db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
     const storedIds = (await db.appSettings.get(demoItemIdsKey))?.value;
     let parsedIds: unknown = [];
     if (typeof storedIds === "string") {
@@ -517,7 +560,6 @@ export async function savePersonalWardrobeItem(item: WardrobeItem, images: ItemI
       await db.wardrobeItems.bulkDelete(demoIds);
       await db.itemImages.bulkDelete(demoIds);
     }
-
     const profile = await db.preferenceProfiles.get("default");
     if (isCannedDemoProfile(profile)) {
       const personalProfile = profile ? materializePersonalProfile(profile) : null;
@@ -526,16 +568,72 @@ export async function savePersonalWardrobeItem(item: WardrobeItem, images: ItemI
     }
     await db.dailySessions.clear();
     await db.outfitVersions.clear();
-    await db.wardrobeItems.add(item);
-    await db.itemImages.add(images);
-    await db.appSettings.put({ key: experienceModeKey, value: "personal" });
     await db.appSettings.put({ key: demoWardrobeSeededKey, value: true });
+    await db.appSettings.delete(demoItemIdsKey);
+    await db.appSettings.put({ key: personalCleanupPendingKey, value: false });
+  });
+}
+
+/**
+ * Commit the product-critical item and display images first. Optional original
+ * storage and Demo cleanup are deliberately separate so Safari cannot abort a
+ * first personal save because an unrelated store or a large archival Blob fails.
+ */
+export async function savePersonalWardrobeItem(item: WardrobeItem, images: ItemImageSet) {
+  if (item.id !== images.itemId) throw new Error("WARDROBE_IMAGE_ITEM_MISMATCH");
+  const requiredImages: StoredItemImageSet = {
+    itemId: images.itemId,
+    cutoutBlob: await encodeStoredImage(images.cutoutBlob),
+    thumbnailBlob: await encodeStoredImage(images.thumbnailBlob),
+    ...(images.cutoutMaskBlob ? { cutoutMaskBlob: await encodeStoredImage(images.cutoutMaskBlob) } : {}),
+    width: images.width,
+    height: images.height,
+    createdAt: images.createdAt,
+    updatedAt: images.updatedAt,
+  };
+  let alreadySaved = false;
+  await db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages], async () => {
+    const [existingItem, existingImages] = await Promise.all([db.wardrobeItems.get(item.id), db.itemImages.get(item.id)]);
+    if (existingItem || existingImages) {
+      if (existingItem && existingImages) {
+        alreadySaved = true;
+      } else {
+        throw new Error("PARTIAL_WARDROBE_RECORD");
+      }
+    } else {
+      await db.wardrobeItems.add(item);
+      await db.itemImages.add(requiredImages);
+    }
+    await db.appSettings.put({ key: experienceModeKey, value: "personal" });
+    await db.appSettings.put({ key: personalCleanupPendingKey, value: true });
     const onboarding = parseOnboardingState((await db.appSettings.get(onboardingStateKey))?.value);
     if (onboarding?.status === "complete" && onboarding.experienceMode !== "personal") {
       await writeOnboardingState({ ...onboarding, experienceMode: "personal" });
     }
-    return { itemId: item.id, alreadySaved: false };
   });
+
+  await verifyPersonalWardrobeItemSave(item.id);
+
+  let cleanupPending = false;
+  try {
+    await finalizePersonalWardrobeMigration();
+  } catch {
+    cleanupPending = true;
+    await db.appSettings.put({ key: personalCleanupPendingKey, value: true }).catch(() => undefined);
+  }
+
+  let originalStored = Boolean((await db.itemImages.get(item.id))?.originalBlob);
+  if (!originalStored && images.originalBlob?.size) {
+    try {
+      await db.itemImages.update(item.id, { originalBlob: await encodeStoredImage(images.originalBlob), updatedAt: images.updatedAt });
+      originalStored = Boolean((await db.itemImages.get(item.id))?.originalBlob);
+    } catch {
+      originalStored = false;
+    }
+  }
+
+  await verifyPersonalWardrobeItemSave(item.id);
+  return { itemId: item.id, alreadySaved, originalStored, cleanupPending };
 }
 
 export async function pruneProcessingJobs(now = Date.now(), maximumAgeMs = 24 * 60 * 60 * 1_000) {
@@ -548,6 +646,18 @@ export async function pruneProcessingJobs(now = Date.now(), maximumAgeMs = 24 * 
 export async function getExperienceMode(): Promise<ExperienceMode | null> {
   const value = (await db.appSettings.get(experienceModeKey))?.value;
   return value === "demo" || value === "personal" ? value : null;
+}
+
+export async function getWardrobeItemsForCurrentMode() {
+  const [mode, pending] = await Promise.all([
+    getExperienceMode(),
+    db.appSettings.get(personalCleanupPendingKey),
+  ]);
+  if (mode === "personal" && pending?.value === true) {
+    await finalizePersonalWardrobeMigration().catch(() => undefined);
+  }
+  const items = await db.wardrobeItems.toArray();
+  return mode === "personal" ? items.filter((item) => item.dataProvenance !== "demo") : items;
 }
 
 export async function seedWardrobe(items: WardrobeItem[], options: { explicit?: boolean } = {}) {
