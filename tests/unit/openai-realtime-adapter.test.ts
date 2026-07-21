@@ -7,23 +7,36 @@ const sdk = vi.hoisted(() => {
     connect: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
     mute: ReturnType<typeof vi.fn>;
+    updateSessionConfig: ReturnType<typeof vi.fn>;
+    updateAgent: ReturnType<typeof vi.fn>;
+    agent: unknown;
+    options: unknown;
     emit(event: string, ...args: unknown[]): void;
     emitTransport(event: string, ...args: unknown[]): void;
   }> = [];
+  const agents: unknown[] = [];
   class FakeRealtimeSession {
     readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
     readonly transportListeners = new Map<string, Set<(...args: unknown[]) => void>>();
     connect = vi.fn(async () => undefined);
     close = vi.fn();
     mute = vi.fn();
+    options: unknown;
+    updateSessionConfig = vi.fn();
+    agent: unknown;
+    updateAgent = vi.fn(async (agent: unknown) => {
+      this.agent = agent;
+      return agent;
+    });
     transport = {
       on: (event: string, listener: (...args: unknown[]) => void) => {
         const listeners = this.transportListeners.get(event) ?? new Set();
         listeners.add(listener);
         this.transportListeners.set(event, listeners);
       },
+      updateSessionConfig: this.updateSessionConfig,
     };
-    constructor() { sessions.push(this); }
+    constructor(agent: unknown, options: unknown) { this.agent = agent; this.options = options; sessions.push(this); }
     on(event: string, listener: (...args: unknown[]) => void) {
       const listeners = this.listeners.get(event) ?? new Set();
       listeners.add(listener);
@@ -32,16 +45,21 @@ const sdk = vi.hoisted(() => {
     emit(event: string, ...args: unknown[]) { this.listeners.get(event)?.forEach((listener) => listener(...args)); }
     emitTransport(event: string, ...args: unknown[]) { this.transportListeners.get(event)?.forEach((listener) => listener(...args)); }
   }
-  return { sessions, FakeRealtimeSession };
+  return { agents, sessions, FakeRealtimeSession };
 });
 
 vi.mock("@openai/agents/realtime", () => ({
-  RealtimeAgent: class FakeRealtimeAgent {},
+  RealtimeAgent: class FakeRealtimeAgent {
+    constructor(input: Record<string, unknown>) {
+      Object.assign(this, input);
+      sdk.agents.push(input);
+    }
+  },
   RealtimeSession: sdk.FakeRealtimeSession,
   tool: (definition: unknown) => definition,
 }));
 
-import { OpenAIRealtimeVoiceAdapter, createRealtimeVoiceTools, type VoiceToolHandlers } from "@/lib/realtime/voice-session";
+import { OpenAIRealtimeVoiceAdapter, VoiceConnectionFailure, createRealtimeVoiceTools, type VoiceToolHandlers } from "@/lib/realtime/voice-session";
 import { PreferenceDeltaSchema, type PreferenceDelta } from "@/domain/schemas";
 
 const handlers: VoiceToolHandlers = {
@@ -53,6 +71,7 @@ const handlers: VoiceToolHandlers = {
 };
 
 beforeEach(() => {
+  sdk.agents.length = 0;
   sdk.sessions.length = 0;
   vi.restoreAllMocks();
 });
@@ -84,6 +103,36 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     await expect(preferenceTool.execute(delta)).resolves.toEqual({ success: true, summary: "Saved." });
     expect(savePreference).toHaveBeenCalledWith(delta);
     expect(() => preferenceTool.execute({ rule: "silver jewelry", polarity: "prefer", evidencePhrase: "Usually silver" })).toThrow();
+  });
+
+  it("accepts a minimal first-turn intent and fills safe defaults instead of requiring formatting trivia", async () => {
+    const requestRecommendation = vi.fn().mockResolvedValue({ success: true, summary: "Ready." });
+    const tools = createRealtimeVoiceTools({ ...handlers, requestRecommendation }, "today");
+    const recommendationTool = tools.find((candidate) => (candidate as { name?: string }).name === "request_outfit_recommendation") as unknown as { execute(value: unknown): Promise<unknown>; errorFunction(context: unknown, error: unknown): unknown };
+
+    await recommendationTool.execute({ freeformSummary: "Hiking, then dinner, with my navy hoodie." });
+    expect(requestRecommendation).toHaveBeenCalledWith(expect.objectContaining({
+      activities: [],
+      aestheticTerms: [],
+      excludedCategories: [],
+      excludedItemIds: [],
+      requiredItemIds: [],
+      temporaryPreferences: [],
+      temporaryItemRules: [],
+      comfortPriority: 3,
+      photoPriority: 3,
+      walkingIntensity: 2,
+    }));
+
+    let validationError: unknown;
+    try { await recommendationTool.execute({ freeformSummary: "" }); }
+    catch (error) { validationError = error; }
+    expect(JSON.parse(String(recommendationTool.errorFunction(null, validationError)))).toMatchObject({
+      success: false,
+      failureStage: "tool",
+      errorCode: "TOOL_ARGUMENTS_INVALID",
+      zodIssuePaths: ["freeformSummary"],
+    });
   });
 
   it("uses one token and one transport for connect, multiple turns, and cleanup", async () => {
@@ -134,5 +183,146 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
 
     expect(states.at(-1)).toBe("idle");
     expect(states.filter((state) => state === "error")).toHaveLength(0);
+  });
+
+  it("configures a fast first turn with one required tool, then restores the full auto tool set", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    expect(session.options).toMatchObject({
+      config: {
+        toolChoice: "required",
+        audio: { input: { turnDetection: { type: "semantic_vad", eagerness: "high" } } },
+      },
+    });
+    expect((session.agent as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
+      "request_outfit_recommendation",
+    ]);
+    session.emit("agent_tool_start", {}, {}, { name: "request_outfit_recommendation" }, { toolCall: { callId: "call-1" } });
+    await vi.waitFor(() => expect(session.updateAgent).toHaveBeenCalledTimes(1));
+    expect(((session.updateAgent.mock.calls[0]?.[0]) as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
+      "request_outfit_recommendation",
+      "revise_current_outfit",
+      "confirm_current_outfit",
+      "set_item_availability",
+      "save_explicit_preference",
+    ]);
+    expect(session.updateSessionConfig).toHaveBeenCalledTimes(2);
+    expect(session.updateSessionConfig.mock.calls).toEqual([
+      [{ toolChoice: "auto" }],
+      [{ toolChoice: "auto" }],
+    ]);
+  });
+
+  it("clears the no-tool watchdog after a successful initial recommendation and keeps the session reusable", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const requestRecommendation = vi.fn().mockResolvedValue({ success: true, summary: "Ready." });
+    const adapter = new OpenAIRealtimeVoiceAdapter({ ...handlers, requestRecommendation }, { purpose: "today", requireInitialRecommendation: true });
+    const states: string[] = [];
+    const failures: string[] = [];
+    adapter.onState((state) => states.push(state));
+    adapter.onFailure((failure) => failures.push(failure.code));
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+    const recommendationTool = (session.agent as { tools: Array<{ name: string; execute(input: unknown): Promise<unknown> }> }).tools[0]!;
+
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("agent_tool_start", {}, {}, recommendationTool, { toolCall: { callId: "call-1" } });
+    const result = await recommendationTool.execute({ freeformSummary: "Hiking and dinner." });
+    session.emit("agent_tool_end", {}, {}, recommendationTool, JSON.stringify(result), { toolCall: { callId: "call-1" } });
+    session.emit("audio_stopped");
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(requestRecommendation).toHaveBeenCalledTimes(1);
+    expect(failures).toEqual([]);
+    expect(states.at(-1)).toBe("listening");
+    expect(session.updateAgent).toHaveBeenCalledTimes(1);
+
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(failures).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("emits user and assistant transcripts separately when one full history update contains both", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers);
+    const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
+    adapter.onTranscript((transcript) => transcripts.push(transcript));
+    await adapter.connect();
+
+    sdk.sessions[0]!.emit("history_updated", [
+      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
+      { itemId: "assistant-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_audio", transcript: "I found one." }] },
+    ]);
+
+    expect(transcripts).toEqual([
+      { role: "user", text: "Hiking and dinner.", final: true },
+      { role: "assistant", text: "I found one.", final: true },
+    ]);
+  });
+
+  it("does not return to Listening when assistant audio ends before the required recommendation tool succeeds", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    const states: string[] = [];
+    const failures: string[] = [];
+    adapter.onState((state) => states.push(state));
+    adapter.onFailure((failure) => failures.push(failure.code));
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("audio_start");
+    session.emit("audio_stopped");
+    expect(states.at(-1)).not.toBe("listening");
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(failures).toEqual(["INITIAL_RECOMMENDATION_TIMEOUT"]);
+    expect(states.at(-1)).toBe("error");
+    vi.useRealTimers();
+  });
+
+  it("does not clear the unresolved first turn when speech interrupts a running recommendation tool", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    const states: string[] = [];
+    adapter.onState((state) => states.push(state));
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("agent_tool_start", {}, {}, { name: "request_outfit_recommendation" }, { toolCall: { callId: "call-1" } });
+    session.emit("transport_event", { type: "input_audio_buffer.speech_started" });
+    session.emit("audio_stopped");
+
+    expect(states.at(-1)).toBe("thinking");
+  });
+
+  it("preserves tool argument failure classification and safe issue paths in diagnostics", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const failures: VoiceConnectionFailure[] = [];
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, {
+      attemptId: crypto.randomUUID(),
+      sessionGeneration: 4,
+      purpose: "today",
+      requireInitialRecommendation: true,
+      diagnostic: (entry) => diagnostics.push(entry),
+    });
+    adapter.onFailure((failure) => failures.push(failure));
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+    const tool = { name: "request_outfit_recommendation" };
+    session.emit("agent_tool_start", {}, {}, tool, { toolCall: { callId: "call-1" } });
+    session.emit("agent_tool_end", {}, {}, tool, JSON.stringify({ success: false, summary: "Try again.", failureStage: "tool", errorCode: "TOOL_ARGUMENTS_INVALID", zodIssuePaths: ["requiredItemIds.0"] }), { toolCall: { callId: "call-1" } });
+
+    expect(failures.at(-1)).toMatchObject({ stage: "tool", code: "TOOL_ARGUMENTS_INVALID", zodIssuePaths: ["requiredItemIds.0"] });
+    expect(diagnostics.at(-1)).toMatchObject({ stage: "tool", result: "error", errorCode: "TOOL_ARGUMENTS_INVALID", zodIssuePaths: ["requiredItemIds.0"] });
+    expect(JSON.stringify(diagnostics)).not.toContain("Hiking");
   });
 });

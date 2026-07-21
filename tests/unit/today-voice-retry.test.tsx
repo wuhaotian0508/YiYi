@@ -1,12 +1,28 @@
 import "fake-indexeddb/auto";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 import TodayPage from "@/app/today/page";
+import { VoiceConnectionFailure, type TranscriptState, type VoiceSessionAdapter, type VoiceState } from "@/lib/realtime/voice-session";
+import { voiceSessionCoordinator } from "@/lib/realtime/voice-session-coordinator";
 import { db } from "@/lib/storage/db";
+
+class TranscriptVoiceAdapter implements VoiceSessionAdapter {
+  private readonly states = new Set<(state: VoiceState) => void>();
+  private readonly transcripts = new Set<(transcript: TranscriptState) => void>();
+  private readonly failures = new Set<(failure: VoiceConnectionFailure) => void>();
+  async connect() { this.emitState("listening"); }
+  async disconnect() { this.emitState("idle"); }
+  mute() {}
+  onState(listener: (state: VoiceState) => void) { this.states.add(listener); return () => this.states.delete(listener); }
+  onTranscript(listener: (transcript: TranscriptState) => void) { this.transcripts.add(listener); return () => this.transcripts.delete(listener); }
+  onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failures.add(listener); return () => this.failures.delete(listener); }
+  emitState(state: VoiceState) { this.states.forEach((listener) => listener(state)); }
+  emitTranscript(transcript: TranscriptState) { this.transcripts.forEach((listener) => listener(transcript)); }
+}
 
 describe("Today live voice recovery", () => {
   beforeEach(async () => {
@@ -21,6 +37,8 @@ describe("Today live voice recovery", () => {
   });
 
   afterEach(async () => {
+    cleanup();
+    await voiceSessionCoordinator.stop("today", "cleanup");
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     await db.delete();
@@ -49,5 +67,17 @@ describe("Today live voice recovery", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Start live voice session" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Start live voice session" }));
     await waitFor(() => expect(tokenRequests).toBe(2));
+  });
+
+  it("keeps assistant captions out of the YOUR DAY transcript", async () => {
+    const adapter = new TranscriptVoiceAdapter();
+    await voiceSessionCoordinator.start("today", () => adapter);
+    adapter.emitTranscript({ role: "user", text: "Hiking, then dinner.", final: true });
+    adapter.emitTranscript({ role: "assistant", text: "I found one for you.", final: true });
+
+    render(<TodayPage />);
+
+    expect(await screen.findByRole("heading", { name: "“Hiking, then dinner.”" })).toBeVisible();
+    expect(screen.queryByText(/I found one for you/)).not.toBeInTheDocument();
   });
 });

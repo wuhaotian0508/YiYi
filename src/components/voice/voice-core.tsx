@@ -1,7 +1,7 @@
 "use client";
 
 import { YiYiMark } from "@/components/brand/yiyi-mark";
-import { MicOff, PhoneOff, Volume2 } from "lucide-react";
+import { Mic, MicOff, PhoneOff } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotionConfig } from "motion/react";
 import { motionDuration, motionEase, quickSpring } from "@/lib/motion/tokens";
 
@@ -81,19 +81,22 @@ export function VoiceDock({
 }) {
   const reduceMotion = useReducedMotionConfig();
   const ringActive = state === "listening" || state === "speaking";
+  const primaryContents = <>
+    <span className="voice-dock-rings" aria-hidden="true"><motion.i animate={!reduceMotion && ringActive ? { scale: [0.92, 1.34], opacity: [0.52, 0] } : { scale: 1, opacity: 0 }} transition={!reduceMotion && ringActive ? { duration: state === "speaking" ? 1.25 : 1.85, repeat: Number.POSITIVE_INFINITY, ease: "easeOut" } : { duration: motionDuration.short }} /><motion.i animate={!reduceMotion && state === "speaking" ? { scale: [0.92, 1.28], opacity: [0.38, 0] } : { scale: 1, opacity: 0 }} transition={!reduceMotion && state === "speaking" ? { duration: 1.25, delay: 0.3, repeat: Number.POSITIVE_INFINITY, ease: "easeOut" } : { duration: motionDuration.short }} /></span>
+    <YiYiMark size={46} expression={state === "speaking" ? "speaking" : state === "listening" ? "listening" : "idle"} />
+  </>;
   return (
     <div className="voice-dock" data-active={active} data-state={state}>
       <AnimatePresence initial={false}>{active && onMute && (
-        <motion.button className="voice-dock-side voice-dock-mute" type="button" onClick={onMute} aria-label={muted ? "Unmute" : "Mute"} initial={{ opacity: 0, scale: reduceMotion ? 1 : 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.94 }} transition={{ duration: motionDuration.short, ease: motionEase.standard }} whileTap={reduceMotion ? undefined : { scale: 0.9 }}>
-          {muted ? <Volume2 size={18} /> : <MicOff size={18} />}
+        <motion.button className="voice-dock-side voice-dock-mute" type="button" onClick={onMute} aria-label={muted ? "Unmute microphone" : "Mute microphone"} title={muted ? "Unmute" : "Mute"} initial={{ opacity: 0, scale: reduceMotion ? 1 : 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.94 }} transition={{ duration: motionDuration.short, ease: motionEase.standard }} whileTap={reduceMotion ? undefined : { scale: 0.9 }}>
+          {muted ? <MicOff size={18} /> : <Mic size={18} />}
         </motion.button>
       )}</AnimatePresence>
-      <motion.button className="voice-dock-primary" type="button" onClick={onPrimary} disabled={disabled} aria-label={active ? status : "Start live voice session"} whileTap={reduceMotion || disabled ? undefined : { scale: 0.91 }} animate={reduceMotion ? undefined : state === "interrupted" ? { scale: [1, 0.94, 1] } : { scale: 1 }} transition={state === "interrupted" ? { duration: 0.3, ease: motionEase.standard } : quickSpring}>
-        <span className="voice-dock-rings" aria-hidden="true"><motion.i animate={!reduceMotion && ringActive ? { scale: [0.92, 1.34], opacity: [0.52, 0] } : { scale: 1, opacity: 0 }} transition={!reduceMotion && ringActive ? { duration: state === "speaking" ? 1.25 : 1.85, repeat: Number.POSITIVE_INFINITY, ease: "easeOut" } : { duration: motionDuration.short }} /><motion.i animate={!reduceMotion && state === "speaking" ? { scale: [0.92, 1.28], opacity: [0.38, 0] } : { scale: 1, opacity: 0 }} transition={!reduceMotion && state === "speaking" ? { duration: 1.25, delay: 0.3, repeat: Number.POSITIVE_INFINITY, ease: "easeOut" } : { duration: motionDuration.short }} /></span>
-        <YiYiMark size={46} expression={state === "speaking" ? "speaking" : state === "listening" ? "listening" : "idle"} />
-      </motion.button>
+      {onPrimary
+        ? <motion.button className="voice-dock-primary" type="button" onClick={onPrimary} disabled={disabled} aria-label={active ? status : "Start live voice session"} whileTap={reduceMotion || disabled ? undefined : { scale: 0.91 }} animate={reduceMotion ? undefined : state === "interrupted" ? { scale: [1, 0.94, 1] } : { scale: 1 }} transition={state === "interrupted" ? { duration: 0.3, ease: motionEase.standard } : quickSpring}>{primaryContents}</motion.button>
+        : <motion.div className="voice-dock-primary" role="img" aria-label={status} animate={reduceMotion ? undefined : state === "interrupted" ? { scale: [1, 0.94, 1] } : { scale: 1 }} transition={state === "interrupted" ? { duration: 0.3, ease: motionEase.standard } : quickSpring}>{primaryContents}</motion.div>}
       <AnimatePresence initial={false}>{active && onEnd && (
-        <motion.button className="voice-dock-side voice-dock-end" type="button" onClick={onEnd} aria-label="End session" initial={{ opacity: 0, scale: reduceMotion ? 1 : 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.94 }} transition={{ duration: motionDuration.short, ease: motionEase.standard }} whileTap={reduceMotion ? undefined : { scale: 0.9 }}><PhoneOff size={18} /></motion.button>
+        <motion.button className="voice-dock-side voice-dock-end" type="button" onClick={onEnd} aria-label="End voice session" title="End" initial={{ opacity: 0, scale: reduceMotion ? 1 : 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.94 }} transition={{ duration: motionDuration.short, ease: motionEase.standard }} whileTap={reduceMotion ? undefined : { scale: 0.9 }}><PhoneOff size={18} /></motion.button>
       )}</AnimatePresence>
       <span className="voice-dock-status" aria-live="polite">{status}</span>
     </div>

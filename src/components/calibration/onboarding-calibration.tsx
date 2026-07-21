@@ -74,7 +74,6 @@ export function removeLastCalibrationAnswer(responses: readonly CalibrationRespo
 type OnboardingCalibrationProps = {
   questionIndex: number;
   responses: CalibrationResponse[];
-  presentationSeed: number;
   onQuestionIndexChange: (index: number) => void;
   onResponses: (responses: CalibrationResponse[]) => void;
   onBack: () => void;
@@ -84,7 +83,6 @@ type OnboardingCalibrationProps = {
 export function OnboardingCalibration({
   questionIndex,
   responses,
-  presentationSeed,
   onQuestionIndexChange,
   onResponses,
   onBack,
@@ -94,10 +92,9 @@ export function OnboardingCalibration({
   const question = calibrationCatalogV2.questions[questionIndex];
   const currentResponse = responses.find((response) => response.questionId === question.id);
   const currentChoice = currentResponse?.choice;
-  const defaultPresentationOrder: CalibrationPresentationOrder = (presentationSeed + questionIndex) % 2 === 1
-    ? ["b", "a"]
-    : ["a", "b"];
-  const presentationOrder = currentResponse?.presentationOrder ?? defaultPresentationOrder;
+  // The catalog IDs remain canonical persisted values. Formal onboarding uses a
+  // stable presentation so internal counterbalancing never appears as B/A UI.
+  const presentationOrder: CalibrationPresentationOrder = ["a", "b"];
   const presentedOptions = presentationOrder.map((canonicalId) => ({
     canonicalId,
     option: canonicalId === "a" ? question.optionA : question.optionB,

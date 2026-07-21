@@ -15,13 +15,18 @@ test("one explicit start creates one Realtime token and one reusable ready sessi
   await expect(start).toBeEnabled();
   const tokenResponse = page.waitForResponse((response) => response.url().includes("/api/realtime/token"));
 
+  const startAt = Date.now();
   await start.click();
-  expect((await tokenResponse).status()).toBe(200);
+  const response = await tokenResponse;
+  const tokenResponseAt = Date.now();
+  expect(response.status()).toBe(200);
   await expect(page.getByText("Listening…")).toBeVisible({ timeout: 20_000 });
+  const readyAt = Date.now();
+  console.info(`[realtime-live-smoke] ${JSON.stringify({ tokenResponseMs: tokenResponseAt - startAt, readyMs: readyAt - startAt, tokenRequests })}`);
   await page.waitForTimeout(6_000);
   expect(tokenRequests).toBe(1);
 
-  await page.getByRole("button", { name: "End session" }).click();
+  await page.getByRole("button", { name: "End voice session" }).click();
   await expect(page.getByRole("button", { name: "Start live voice session" })).toBeEnabled();
   expect(tokenRequests).toBe(1);
 });

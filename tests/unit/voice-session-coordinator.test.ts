@@ -34,6 +34,7 @@ class FakeVoiceAdapter implements VoiceSessionAdapter {
   emit(state: VoiceState) { this.states.forEach((listener) => listener(state)); }
   fail(failure: VoiceConnectionFailure) { this.failures.forEach((listener) => listener(failure)); this.emit("error"); }
   failWithoutState(failure: VoiceConnectionFailure) { this.failures.forEach((listener) => listener(failure)); }
+  emitTranscript(transcript: TranscriptState) { this.transcripts.forEach((listener) => listener(transcript)); }
 }
 
 describe("VoiceSessionCoordinator", () => {
@@ -192,5 +193,19 @@ describe("VoiceSessionCoordinator", () => {
 
     await coordinator.start("today", () => recovered);
     expect(recovered.connectCalls).toBe(1);
+  });
+
+  it("keeps the latest user transcript separate from the assistant caption", async () => {
+    const adapter = new FakeVoiceAdapter();
+    const coordinator = new VoiceSessionCoordinator();
+    await coordinator.start("today", () => adapter);
+
+    adapter.emitTranscript({ role: "user", text: "Hiking and dinner.", final: true });
+    adapter.emitTranscript({ role: "assistant", text: "I found one.", final: true });
+
+    expect(coordinator.getSnapshot()).toMatchObject({
+      latestUserTranscript: { role: "user", text: "Hiking and dinner.", final: true },
+      latestAssistantCaption: { role: "assistant", text: "I found one.", final: true },
+    });
   });
 });

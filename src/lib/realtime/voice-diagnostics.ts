@@ -14,6 +14,14 @@ export type VoiceDiagnostic = {
   sdkConnectionStatus?: string;
   disconnectReason?: string;
   tokenRequest?: "new" | "reused";
+  speechStoppedAt?: number;
+  toolName?: string;
+  toolStartAt?: number;
+  toolEndAt?: number;
+  success?: boolean;
+  zodIssuePaths?: string[];
+  outfitCommittedAt?: number;
+  audioStartedAt?: number;
 };
 
 export function logVoiceDiagnostic(diagnostic: VoiceDiagnostic) {

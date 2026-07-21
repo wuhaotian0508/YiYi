@@ -1583,7 +1583,7 @@ Development model: `gpt-realtime-2.1-mini`.
 
 Initial voice: configure through `OPENAI_REALTIME_VOICE`; use `marin` only if supported by the installed API version.
 
-Use typed SDK session configuration. Configure semantic VAD with medium eagerness and interruption when the installed SDK types support it. Do not bypass TypeScript with `as any` to force an outdated config shape.
+Use typed SDK session configuration. Configure semantic VAD with high eagerness and interruption for the first recommendation flow. Do not bypass TypeScript with `as any` to force an outdated config shape.
 
 The adapter maps SDK typed events into:
 

@@ -35,6 +35,26 @@ afterEach(() => {
 });
 
 describe("paid provider fault boundaries", () => {
+  it("configures the Realtime token with high semantic VAD eagerness", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "live");
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    provider.clientSecret.mockResolvedValue({ value: "ek_test-only", expires_at: 1_800_000_000 });
+
+    const response = await createRealtimeToken(new Request("http://localhost/api/realtime/token", { method: "POST", headers: { "x-forwarded-for": crypto.randomUUID() } }));
+
+    expect(response.status).toBe(200);
+    expect(provider.clientSecret).toHaveBeenCalledWith(expect.objectContaining({
+      session: expect.objectContaining({
+        audio: expect.objectContaining({
+          input: expect.objectContaining({
+            turn_detection: { type: "semantic_vad", eagerness: "high", create_response: true, interrupt_response: true },
+          }),
+        }),
+      }),
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
   it("maps a Realtime provider failure to one structured 502 without exposing provider text", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "live");

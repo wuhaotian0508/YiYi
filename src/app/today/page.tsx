@@ -78,7 +78,7 @@ export function TodayPage() {
   const [activePage, setActivePage] = useState(0);
   const [phase, setPhase] = useState<Phase>("idle");
   const voiceSnapshot = useSyncExternalStore(voiceSessionCoordinator.subscribe, voiceSessionCoordinator.getSnapshot, voiceSessionServerSnapshot);
-  const transcript = voiceSnapshot.owner === "today" ? voiceSnapshot.transcript?.text ?? "" : "";
+  const transcript = voiceSnapshot.owner === "today" ? voiceSnapshot.latestUserTranscript?.text ?? "" : "";
   const [hydrated, setHydrated] = useState(false);
   const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([]);
   const [intent, setIntent] = useState<DailyIntent>(demoIntent);
@@ -201,7 +201,7 @@ export function TodayPage() {
   }, [voiceSnapshot.owner, voiceSnapshot.status]);
 
   useEffect(() => {
-    const nextTranscript = voiceSnapshot.transcript;
+    const nextTranscript = voiceSnapshot.latestUserTranscript;
     if (voiceSnapshot.owner !== "today" || !nextTranscript) return;
     if (nextTranscript.role !== "user" || !nextTranscript.final || process.env.NEXT_PUBLIC_VOICE_MODE === "live") return;
     const key = `${voiceSnapshot.generation}:${nextTranscript.text}`;
@@ -210,7 +210,7 @@ export function TodayPage() {
     void runRecommendation(demoIntent, nextTranscript.text);
   // runRecommendation reads current refs and is intentionally triggered only by a new final mock transcript.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voiceSnapshot.generation, voiceSnapshot.owner, voiceSnapshot.transcript]);
+  }, [voiceSnapshot.generation, voiceSnapshot.latestUserTranscript, voiceSnapshot.owner]);
 
   useEffect(() => {
     if (phase === "understanding") playSound("understood");
@@ -260,6 +260,7 @@ export function TodayPage() {
     const sessionId = sessionIdRef.current ?? crypto.randomUUID();
     sessionIdRef.current = sessionId;
     setPhase(input.operation === "initial" ? "understanding" : "revising");
+    let failureStage: "recommendation" | "persistence" | "lifecycle" = "persistence";
     try {
       if (input.voiceGeneration !== undefined && !voiceSessionCoordinator.isCurrent("today", input.voiceGeneration)) {
         operationControllerRef.current.finish(token);
@@ -267,6 +268,7 @@ export function TodayPage() {
       }
       const items = await db.wardrobeItems.toArray();
       const profile = (await db.preferenceProfiles.get("default")) ?? createNeutralPreferenceProfile();
+      failureStage = "recommendation";
       const decision = runRecommendationDecision({
         wardrobe: items,
         intent: input.nextIntent ?? intentRef.current,
@@ -300,8 +302,10 @@ export function TodayPage() {
       }
       assertDisplayedOutfitLegal(ranked.outfit, decision.context);
       operationControllerRef.current.enterCommit(token);
+      failureStage = "persistence";
       const committed = await commitOutfitMutation({ sessionId, dateKey: localDateKey(), intent: decision.context.intent, weather: weatherRef.current, outfit: ranked.outfit, baseVersionId: token.baseVersionId, expectedGeneration, revisionRequest: before ? input.utterance : null });
       operationControllerRef.current.enterPublish(token);
+      failureStage = "lifecycle";
       setWardrobe(items);
       wardrobeRef.current = items;
       setIntent(decision.context.intent);
@@ -340,7 +344,18 @@ export function TodayPage() {
       operationControllerRef.current.finish(token);
       setPhase(currentRef.current && !input.clearInvalidCurrentOnFailure ? "presenting" : "error");
       const summary = error instanceof RecommendationError ? error.message : "I could not produce a legal outfit for that request.";
-      return { success: false as const, summary };
+      return {
+        success: false as const,
+        summary,
+        failureStage,
+        errorCode: error instanceof RecommendationError
+          ? error.code
+          : failureStage === "persistence"
+            ? "OUTFIT_PERSISTENCE_FAILED"
+            : failureStage === "lifecycle"
+              ? "OUTFIT_PUBLISH_FAILED"
+              : "RECOMMENDATION_FAILED",
+      };
     }
   }
 
@@ -476,7 +491,7 @@ export function TodayPage() {
     resetInactivityTimer();
     try {
       await voiceSessionCoordinator.start("today", ({ attemptId, generation }) => process.env.NEXT_PUBLIC_VOICE_MODE === "live"
-        ? new OpenAIRealtimeVoiceAdapter(createHandlers(generation), { attemptId, sessionGeneration: generation, purpose: "today" })
+        ? new OpenAIRealtimeVoiceAdapter(createHandlers(generation), { attemptId, sessionGeneration: generation, purpose: "today", requireInitialRecommendation: !resumeExisting })
         : new MockVoiceSessionAdapter(autoMock && !resumeExisting));
     } catch {
       clearSessionTimers();

@@ -41,8 +41,6 @@ export default function FirstRunPage() {
   const calibrationResponsesRef = useRef<CalibrationResponse[]>([]);
   const calibrationHistoryRef = useRef<CalibrationResponse[][]>([]);
   const [calibrationHistoryDepth, setCalibrationHistoryDepth] = useState(0);
-  const [calibrationPresentationSeed, setCalibrationPresentationSeed] = useState(0);
-  const calibrationPresentationSeedRef = useRef<number | null>(null);
   const calibrationProfile = useMemo(() => buildPreferenceProfile({
     direction,
     responses: calibrationResponses,
@@ -112,11 +110,6 @@ export default function FirstRunPage() {
   }
 
   function beginCalibration() {
-    if (calibrationPresentationSeedRef.current === null) {
-      const seed = window.crypto.getRandomValues(new Uint32Array(1))[0] & 1;
-      calibrationPresentationSeedRef.current = seed;
-      setCalibrationPresentationSeed(seed);
-    }
     setStage("calibrate");
   }
 
@@ -190,7 +183,7 @@ export default function FirstRunPage() {
         {stage === "intro" && <ConversationalOnboarding key="intro" onComplete={() => setStage("permission")} />}
         {(stage === "permission" || stage === "denied") && <Permission key={stage} denied={stage === "denied"} onAllow={requestMicrophone} />}
         {stage === "direction" && <DirectionScreen key="direction" selected={direction} onChange={setDirection} onNext={beginCalibration} />}
-        {stage === "calibrate" && <Screen key={`calibration-${calibrationQuestionIndex}`} className="calibration-screen"><OnboardingCalibration questionIndex={calibrationQuestionIndex} responses={calibrationResponses} presentationSeed={calibrationPresentationSeed} onQuestionIndexChange={setCalibrationQuestionIndex} onResponses={recordCalibrationResponses} onBack={() => setStage("direction")} onFinish={() => setStage("preferences")} /></Screen>}
+        {stage === "calibrate" && <Screen key={`calibration-${calibrationQuestionIndex}`} className="calibration-screen"><OnboardingCalibration questionIndex={calibrationQuestionIndex} responses={calibrationResponses} onQuestionIndexChange={setCalibrationQuestionIndex} onResponses={recordCalibrationResponses} onBack={() => setStage("direction")} onFinish={() => setStage("preferences")} /></Screen>}
         {stage === "preferences" && <PreferenceScreen key="preferences" profile={profileDraft} saving={preferenceSaving} saveError={preferenceMutationError} onSaveDelta={saveExplicitDelta} onProfileChange={(profile) => { profileDraftRef.current = profile; setProfileDraft(profile); }} onToggleOption={toggleExplicitOption} onRemoveSignal={removeExplicitSignal} onBack={() => { setCalibrationQuestionIndex(lastAnsweredCalibrationIndex(calibrationResponses)); setStage("calibrate"); }} onNext={() => setStage("profile")} />}
         {stage === "profile" && <Screen key="profile" className="profile-review"><CalibrationProfileReview direction={direction} profile={profileDraft} canUndo={calibrationHistoryDepth > 0} disabled={preferenceSaving} onBack={() => setStage("preferences")} onEdit={() => { setCalibrationQuestionIndex(0); setStage("calibrate"); }} onUndo={undoCalibrationAnswer} onNext={() => setStage("setup")} /></Screen>}
         {stage === "setup" && <WardrobeSetup key="setup" busy={finishingMode !== null} error={finishError} onBack={() => setStage("profile")} onExample={() => void finish("demo")} onPersonal={() => void finish("personal")} />}

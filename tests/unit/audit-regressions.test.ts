@@ -42,10 +42,10 @@ describe("audit regressions", () => {
     expect(resolveAvailabilityItemId(null, null)).toBeNull();
   });
 
-  it("uses patient semantic turn detection with automatic response and interruption", () => {
+  it("uses eager semantic turn detection for the first recommendation with automatic response and interruption", () => {
     expect(yiyiTurnDetection).toEqual({
       type: "semantic_vad",
-      eagerness: "low",
+      eagerness: "high",
       createResponse: true,
       interruptResponse: true,
     });

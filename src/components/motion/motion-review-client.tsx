@@ -163,7 +163,7 @@ function CalibrationReview() {
   const [responses, setResponses] = useState<CalibrationResponse[]>([]);
   const [complete, setComplete] = useState(false);
   if (complete) return <section className={styles.simpleScenario} data-review-scenario="calibration-complete"><h1>Calibration complete</h1><p>{responses.filter((response) => response.choice !== "skip").length} explicit comparisons saved.</p><PrimaryButton onClick={() => { setQuestionIndex(0); setResponses([]); setComplete(false); }}>Review again</PrimaryButton></section>;
-  return <section className={styles.simpleScenario} data-review-scenario="calibration"><OnboardingCalibration questionIndex={questionIndex} responses={responses} presentationSeed={11} onQuestionIndexChange={setQuestionIndex} onResponses={setResponses} onBack={() => setQuestionIndex(Math.max(0, questionIndex - 1))} onFinish={() => setComplete(true)} /></section>;
+  return <section className={styles.simpleScenario} data-review-scenario="calibration"><OnboardingCalibration questionIndex={questionIndex} responses={responses} onQuestionIndexChange={setQuestionIndex} onResponses={setResponses} onBack={() => setQuestionIndex(Math.max(0, questionIndex - 1))} onFinish={() => setComplete(true)} /></section>;
 }
 
 function FineTuneReview() {

@@ -18,20 +18,17 @@ function CalibrationHarness({
   onFinish = vi.fn(),
   initialResponses = [],
   initialQuestionIndex = 0,
-  presentationSeed = 0,
 }: {
   onFinish?: () => void;
   initialResponses?: CalibrationResponse[];
   initialQuestionIndex?: number;
-  presentationSeed?: number;
 }) {
   const [responses, setResponses] = useState<CalibrationResponse[]>(initialResponses);
   const [questionIndex, setQuestionIndex] = useState(initialQuestionIndex);
   return <OnboardingCalibration
-    questionIndex={questionIndex}
-    responses={responses}
-    presentationSeed={presentationSeed}
-    onQuestionIndexChange={setQuestionIndex}
+      questionIndex={questionIndex}
+      responses={responses}
+      onQuestionIndexChange={setQuestionIndex}
     onResponses={setResponses}
     onBack={vi.fn()}
     onFinish={onFinish}
@@ -89,14 +86,30 @@ describe("formal onboarding calibration", () => {
     expect(onFinish).toHaveBeenCalledOnce();
   });
 
-  it("counterbalances left and right while keeping the response tied to the canonical option", () => {
-    render(<CalibrationHarness presentationSeed={1} />);
+  it("keeps canonical A on the left and B on the right", () => {
+    render(<CalibrationHarness />);
 
-    expect(screen.getByRole("img", { name: "Polished tailoring beside Relaxed everyday, shown on matching mannequins" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Relaxed everyday beside Polished tailoring, shown on matching mannequins" })).toBeInTheDocument();
     const labels = document.querySelectorAll("[data-calibration-option]");
-    expect([...labels].map((label) => label.textContent)).toEqual(["BPolished tailoring", "ARelaxed everyday"]);
-    expect(screen.getByRole("button", { name: "B feels like me" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "A feels like me" })).toBeInTheDocument();
+    expect([...labels].map((label) => label.textContent)).toEqual(["ARelaxed everyday", "BPolished tailoring"]);
+    expect(document.querySelector('[data-source-option="a"]')).toHaveAttribute("data-presentation-position", "left");
+    expect(document.querySelector('[data-source-option="b"]')).toHaveAttribute("data-presentation-position", "right");
+  });
+
+  it("restores a legacy reversed response without moving the options or changing its canonical choice", () => {
+    const legacy = createCalibrationResponse(
+      calibrationCatalogV2.questions[0].id,
+      "b",
+      1_750_000_000_000,
+      calibrationCatalogV2,
+      ["b", "a"],
+    );
+    render(<CalibrationHarness initialResponses={[legacy]} />);
+
+    expect(document.querySelector('[data-source-option="a"]')).toHaveAttribute("data-presentation-position", "left");
+    expect(document.querySelector('[data-source-option="b"]')).toHaveAttribute("data-presentation-position", "right");
+    expect(screen.getByRole("button", { name: "B feels like me" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "A feels like me" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("ends the calibration early after two consecutive Skips", () => {

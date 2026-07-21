@@ -158,8 +158,9 @@ export function FineTuneVoice({
   }, [coordinator]);
 
   useEffect(() => {
-    if (voiceMode !== "mock" || snapshot.owner !== "fine-tune" || !snapshot.transcript || snapshot.transcript.role !== "user" || !snapshot.transcript.final) return;
-    const key = `${snapshot.generation}:${snapshot.transcript.text}`;
+    const userTranscript = snapshot.latestUserTranscript;
+    if (voiceMode !== "mock" || snapshot.owner !== "fine-tune" || !userTranscript?.final) return;
+    const key = `${snapshot.generation}:${userTranscript.text}`;
     if (handledTranscriptRef.current === key) return;
     handledTranscriptRef.current = key;
     setOutcome("idle");
@@ -167,7 +168,7 @@ export function FineTuneVoice({
     setLocalFailure(null);
     void (async () => {
       try {
-        const deltas = interpretMockPreferenceTranscript(snapshot.transcript?.text ?? "");
+        const deltas = interpretMockPreferenceTranscript(userTranscript.text);
         for (const delta of deltas) {
           const result = await saveStructuredDelta(delta, snapshot.generation);
           if (!result.success) return;
@@ -182,7 +183,7 @@ export function FineTuneVoice({
         setOutcome("error");
       }
     })();
-  }, [coordinator, saveStructuredDelta, snapshot.generation, snapshot.owner, snapshot.transcript, voiceMode]);
+  }, [coordinator, saveStructuredDelta, snapshot.generation, snapshot.latestUserTranscript, snapshot.owner, voiceMode]);
 
   async function start() {
     handledTranscriptRef.current = null;

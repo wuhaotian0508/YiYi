@@ -13,7 +13,8 @@ export type VoiceSessionSnapshot = {
   attemptId: string | null;
   retryAt: number | null;
   errorCode: string | null;
-  transcript: TranscriptState | null;
+  latestUserTranscript: TranscriptState | null;
+  latestAssistantCaption: TranscriptState | null;
 };
 
 type ActiveSession = {
@@ -33,7 +34,8 @@ const initialSnapshot: VoiceSessionSnapshot = {
   attemptId: null,
   retryAt: null,
   errorCode: null,
-  transcript: null,
+  latestUserTranscript: null,
+  latestAssistantCaption: null,
 };
 
 export const voiceSessionServerSnapshot = () => initialSnapshot;
@@ -107,16 +109,18 @@ export class VoiceSessionCoordinator {
       }),
       adapter.onTranscript((transcript) => {
         if (!this.isActive(active)) return;
-        this.publish({ ...this.snapshot, transcript });
+        this.publish(transcript.role === "user"
+          ? { ...this.snapshot, latestUserTranscript: transcript }
+          : { ...this.snapshot, latestAssistantCaption: transcript });
       }),
       adapter.onFailure((failure) => {
         if (!this.isActive(active)) return;
         this.publish({ ...this.snapshot, status: "error", stage: failure.stage, errorCode: failure.code });
-        this.record(active, failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, httpStatus: failure.httpStatus, sdkConnectionStatus: "disconnected" });
+        this.record(active, failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, zodIssuePaths: failure.zodIssuePaths, httpStatus: failure.httpStatus, sdkConnectionStatus: "disconnected" });
         void this.closeRuntimeFailure(active);
       }),
     ];
-    this.publish({ owner, status: "connecting", stage: "token", generation, attemptId, retryAt: null, errorCode: null, transcript: null });
+    this.publish({ owner, status: "connecting", stage: "token", generation, attemptId, retryAt: null, errorCode: null, latestUserTranscript: null, latestAssistantCaption: null });
 
     const promise = adapter.connect().then(
       () => {
@@ -143,7 +147,7 @@ export class VoiceSessionCoordinator {
           retryAt,
           errorCode: failure.code,
         });
-        this.record(active, failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, httpStatus: failure.httpStatus, sdkConnectionStatus: "disconnected" });
+        this.record(active, failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, zodIssuePaths: failure.zodIssuePaths, httpStatus: failure.httpStatus, sdkConnectionStatus: "disconnected" });
         throw failure;
       },
     );
