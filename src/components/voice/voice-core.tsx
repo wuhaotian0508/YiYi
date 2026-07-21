@@ -114,16 +114,16 @@ export function VoiceDock({ state, status, onPrimary, active = false, disabled =
       <motion.i animate={!reduceMotion && ringActive ? { scale: [0.92, 1.34], opacity: [0.48, 0] } : state === "committing" ? { scale: [1.22, 0.94], opacity: [0, 0.5] } : { scale: 1, opacity: 0 }} transition={!reduceMotion && ringActive ? { duration: state === "speaking" ? 1.25 : 1.9, repeat: Number.POSITIVE_INFINITY, ease: "easeOut" } : { duration: 0.34, ease: motionEase.standard }} />
       <motion.i animate={!reduceMotion && ringActive ? { scale: [0.9, 1.27], opacity: [0.32, 0] } : { scale: 1, opacity: 0 }} transition={!reduceMotion && ringActive ? { duration: state === "speaking" ? 1.25 : 2.15, delay: 0.32, repeat: Number.POSITIVE_INFINITY, ease: "easeOut" } : { duration: motionDuration.short }} />
     </motion.span>
-    <motion.span style={reduceMotion ? undefined : { scale: energyScale }}>
-      <motion.span animate={!reduceMotion && state === "revising" ? { scale: [1, 1.06, 1] } : !reduceMotion && state === "interrupted" ? { scale: [1, 0.92, 1] } : { scale: 1 }} transition={state === "revising" ? { duration: 0.48, ease: motionEase.standard } : state === "interrupted" ? { duration: 0.28, ease: motionEase.standard } : quickSpring}>
+    <motion.span className="voice-dock-energy" style={reduceMotion ? undefined : { scale: energyScale }}>
+      <motion.span className={state === "listening" ? "voice-dock-listening-breath" : undefined} animate={!reduceMotion && state === "listening" ? { scale: [1, 1.035, 1], y: [0, -0.6, 0] } : !reduceMotion && state === "revising" ? { scale: [1, 1.06, 1] } : !reduceMotion && state === "interrupted" ? { scale: [1, 0.92, 1] } : { scale: 1, y: 0 }} transition={state === "listening" ? { duration: 2.15, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" } : state === "revising" ? { duration: 0.48, ease: motionEase.standard } : state === "interrupted" ? { duration: 0.28, ease: motionEase.standard } : quickSpring}>
         <YiYiMark size={46} expression={expressionFor(state)} />
       </motion.span>
     </motion.span>
   </>;
   return <div className="voice-dock" data-active={active} data-state={state}>
     {interactive
-      ? <motion.button className="voice-dock-primary" type="button" onClick={onPrimary} disabled={disabled} aria-label={primaryLabel(state)} whileTap={reduceMotion || disabled ? undefined : { scale: 0.91 }} transition={quickSpring}>{primaryContents}</motion.button>
-      : <motion.div className="voice-dock-primary" role="img" aria-label={status}>{primaryContents}</motion.div>}
+      ? <motion.button className="voice-dock-primary" data-base-motion={state === "listening" ? "listening" : undefined} type="button" onClick={onPrimary} disabled={disabled} aria-label={primaryLabel(state)} whileTap={reduceMotion || disabled ? undefined : { scale: 0.91 }} transition={quickSpring}>{primaryContents}</motion.button>
+      : <motion.div className="voice-dock-primary" data-base-motion={state === "listening" ? "listening" : undefined} role="img" aria-label={status}>{primaryContents}</motion.div>}
     <span className="voice-dock-status" aria-live="polite">{status}</span>
   </div>;
 }

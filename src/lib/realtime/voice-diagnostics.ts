@@ -33,6 +33,7 @@ export type VoiceDiagnostic = {
   effectiveToolNames?: string[];
   requestId?: string;
   effectiveVadType?: string;
+  effectiveTranscriptionModel?: string;
   effectiveCreateResponse?: boolean;
   effectiveInterruptResponse?: boolean;
 };

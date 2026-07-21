@@ -14,6 +14,15 @@ describe("VoiceDock controls", () => {
     expect(onPrimary).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: /microphone/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /end voice/i })).not.toBeInTheDocument();
+    expect(control).toHaveAttribute("data-base-motion", "listening");
+    expect(control.querySelectorAll(".voice-dock-rings i")).toHaveLength(2);
+  });
+
+  it("keeps Listening visually distinct without optional audio energy", () => {
+    const { container } = render(<VoiceDock state="listening" status="Listening…" active onPrimary={() => undefined} />);
+    expect(container.querySelector('.voice-dock[data-state="listening"]')).toBeInTheDocument();
+    expect(container.querySelector('.voice-dock-primary[data-base-motion="listening"]')).toBeInTheDocument();
+    expect(container.querySelector('.voice-dock-listening-breath')).toBeInTheDocument();
   });
 
   it("uses the same central control to interrupt speaking", () => {

@@ -399,8 +399,11 @@ button.attribute-row:active { background:#f7f7f8;transform:scale(.99); }
 .voice-dock-primary { grid-column: 1; grid-row: 1; justify-self:center; width: 72px; height: 72px; border-radius: 50%; border: 1px solid #dcdce1; background: #fff; display: grid; place-items: center; position: relative; box-shadow: 0 10px 30px rgb(17 17 17 / .09); transition: background-color 180ms ease; }
 .voice-dock-primary:disabled { opacity: .45; }
 .voice-dock-primary .yiyi-mark { position: relative; z-index: 2; }
+.voice-dock-energy, .voice-dock-listening-breath { display: grid; place-items: center; }
 .voice-dock-rings, .voice-dock-rings i { position: absolute; inset: -1px; border-radius: 50%; }
-.voice-dock-rings i { border: 1px solid #e7e7ea; opacity: 0; }
+.voice-dock-rings i { border: 1px solid #d9dce2; opacity: 0; }
+.voice-dock[data-state="listening"] .voice-dock-primary { background: #fafbfd; border-color: #c7ccd5; box-shadow: 0 10px 30px rgb(17 17 17 / .1), 0 0 0 3px rgb(104 119 143 / .07); }
+.voice-dock[data-state="listening"] .voice-dock-rings i { border-color: #c8ced8; }
 .voice-dock[data-state="thinking"] .voice-dock-primary,
 .voice-dock[data-state="understanding"] .voice-dock-primary,
 .voice-dock[data-state="tool_running"] .voice-dock-primary,

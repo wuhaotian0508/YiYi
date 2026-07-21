@@ -102,7 +102,6 @@ const RESPONSE_CREATE_ACK_TIMEOUT_MS = 10_000;
 const FUNCTION_CALL_START_TIMEOUT_MS = 25_000;
 const TOOL_DISPATCH_TIMEOUT_MS = 10_000;
 const TOOL_EXECUTION_TIMEOUT_MS = 45_000;
-const FINAL_TRANSCRIPT_TIMEOUT_MS = 10_000;
 
 const VoiceToolResultSchema = z.object({
   success: z.boolean(),
@@ -217,16 +216,11 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
   private initialTurnCommitted = false;
   private initialToolStarted = false;
   private responseAckWatchdog: ReturnType<typeof setTimeout> | null = null;
-  private finalTranscriptWatchdog: ReturnType<typeof setTimeout> | null = null;
   private functionCallWatchdog: ReturnType<typeof setTimeout> | null = null;
   private toolDispatchWatchdog: ReturnType<typeof setTimeout> | null = null;
   private toolExecutionWatchdog: ReturnType<typeof setTimeout> | null = null;
   private turnAwaitingTool = false;
   private turnResponseRequested = false;
-  private turnTranscriptReady = false;
-  private turnCaptureActive = false;
-  private latestFinalUserTranscriptSignature = "";
-  private consumedUserTranscriptSignature = "";
   private readonly transcriptSignatures: Record<TranscriptState["role"], string> = { user: "", assistant: "" };
   private readonly diagnostic: (diagnostic: VoiceDiagnostic) => void;
   private readonly now: () => number;
@@ -341,7 +335,12 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           tracingDisabled: true,
           historyStoreAudio: false,
           config: {
-            audio: { input: { turnDetection: yiyiTurnDetection } },
+            audio: {
+              input: {
+                transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
+                turnDetection: yiyiTurnDetection,
+              },
+            },
             ...(this.options.purpose === "today" ? { toolChoice: "required" as const } : {}),
           },
         });
@@ -398,8 +397,6 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
         const success = parsed.success && parsed.data.success;
         this.turnAwaitingTool = false;
         this.turnResponseRequested = false;
-        this.turnCaptureActive = false;
-        if (this.latestFinalUserTranscriptSignature) this.consumedUserTranscriptSignature = this.latestFinalUserTranscriptSignature;
         this.record("tool", success ? "success" : "error", {
           toolName: activeTool.name,
           toolEndAt,
@@ -465,17 +462,20 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           });
           const audio = objectRecord(sessionPayload?.audio);
           const input = objectRecord(audio?.input);
+          const transcription = objectRecord(input?.transcription);
           const turnDetection = objectRecord(input?.turn_detection);
           const expectedTool = this.options.purpose === "fine-tune" ? "save_explicit_preference" : INITIAL_RECOMMENDATION_TOOL;
           const responseOwnedByApplication = turnDetection?.create_response === false && turnDetection?.interrupt_response === false;
           const requiredToolChoiceReady = this.options.purpose !== "today" || sessionPayload?.tool_choice === "required";
-          const effectiveReady = responseOwnedByApplication && requiredToolChoiceReady && toolNames.includes(expectedTool);
+          const transcriptionReady = transcription?.model === "gpt-4o-mini-transcribe";
+          const effectiveReady = responseOwnedByApplication && requiredToolChoiceReady && transcriptionReady && toolNames.includes(expectedTool);
           if (!this.connected) this.effectiveSessionReady = effectiveReady;
           this.record("ready", effectiveReady ? "success" : "error", {
             realtimeEvent: event.type,
             effectiveToolChoice: typeof sessionPayload?.tool_choice === "string" ? sessionPayload.tool_choice : undefined,
             effectiveToolNames: toolNames,
             effectiveVadType: typeof turnDetection?.type === "string" ? turnDetection.type : undefined,
+            effectiveTranscriptionModel: typeof transcription?.model === "string" ? transcription.model : undefined,
             effectiveCreateResponse: typeof turnDetection?.create_response === "boolean" ? turnDetection.create_response : undefined,
             effectiveInterruptResponse: typeof turnDetection?.interrupt_response === "boolean" ? turnDetection.interrupt_response : undefined,
             ...(!effectiveReady ? { errorCode: "SESSION_CONFIG_MISMATCH" } : {}),
@@ -538,8 +538,6 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           if (this.currentState === "listening") {
             followupInvocation = null;
             this.turnResponseRequested = false;
-            this.turnTranscriptReady = false;
-            this.turnCaptureActive = true;
           }
           this.turnController.speechStarted();
         }
@@ -550,14 +548,34 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           this.turnAwaitingTool = true;
           this.record("recommendation", "started", { speechStoppedAt: this.speechStoppedAt });
           this.turnController.speechStopped();
-          this.tryRequestForLatestFinalTranscript();
-          if (!this.turnResponseRequested) this.startFinalTranscriptWatchdog();
+          this.requestApplicationResponse();
+        }
+        if (event.type === "conversation.item.input_audio_transcription.completed") {
+          const text = event.transcript.trim();
+          if (!text) return;
+          const signature = `${event.item_id}:completed:${text}`;
+          if (this.transcriptSignatures.user === signature) return;
+          this.transcriptSignatures.user = signature;
+          this.emitTranscript({ role: "user", text, final: true });
+          this.record("audio", "success", { realtimeEvent: event.type });
+        }
+        if (event.type === "conversation.item.input_audio_transcription.failed") {
+          const error = objectRecord(event.error);
+          this.record("audio", "error", {
+            realtimeEvent: event.type,
+            errorCode: typeof error?.code === "string" ? error.code : "INPUT_TRANSCRIPTION_FAILED",
+            errorType: typeof error?.type === "string" ? error.type : undefined,
+          });
         }
       });
       session.transport.on("connection_change", (status) => {
-        if (!isActive()) return;
+        const activeSession = session;
+        if (!isActive() || !activeSession) return;
         if (status === "connecting") this.turnController.connecting();
+        if (status === "connected") this.startAudioEnergySamplerIfConnected(activeSession);
         if (status === "disconnected") {
+          this.stopAudioEnergySampler?.();
+          this.stopAudioEnergySampler = null;
           if (!this.connected) return;
           this.emitFailure(new VoiceConnectionFailure({ stage: "webrtc", code: "WEBRTC_DISCONNECTED" }));
           this.turnController.fail();
@@ -575,16 +593,6 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           if (this.transcriptSignatures[role] === signature) continue;
           this.transcriptSignatures[role] = signature;
           this.emitTranscript({ role, text, final });
-          if (role === "user" && final) {
-            this.latestFinalUserTranscriptSignature = signature;
-            if (!this.turnCaptureActive && !this.turnAwaitingTool) {
-              // Ignore a late history replay from an already-finished or
-              // failed turn instead of attaching it to the next turn.
-              this.consumedUserTranscriptSignature = signature;
-            } else {
-              this.tryRequestForLatestFinalTranscript();
-            }
-          }
         }
       });
       try { await session.connect({ apiKey: token.value }); }
@@ -607,8 +615,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
         throw new VoiceConnectionFailure({ stage: "ready", code: sessionUpdateObserved ? "SESSION_CONFIG_MISMATCH" : "SESSION_CONFIG_UNCONFIRMED", requestId: this.tokenRequestId });
       }
       this.connected = true;
-      const connectionState = session.transport instanceof OpenAIRealtimeWebRTC ? session.transport.connectionState : null;
-      if (connectionState?.status === "connected") this.stopAudioEnergySampler = startVoiceAudioEnergySampler(connectionState.peerConnection);
+      this.startAudioEnergySamplerIfConnected(session);
       if (this.connectAbortController === connectAbortController) this.connectAbortController = null;
       this.turnController.connected();
     } catch (error) {
@@ -622,21 +629,18 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
     }
   }
 
-  async disconnect() { this.connectGeneration += 1; this.connectPromise = null; this.connectAbortController?.abort(); this.connectAbortController = null; this.clearResponseWatchdogs(); this.clearToolExecutionWatchdog(); this.turnAwaitingTool = false; this.turnResponseRequested = false; this.turnTranscriptReady = false; this.turnCaptureActive = false; this.latestFinalUserTranscriptSignature = ""; this.consumedUserTranscriptSignature = ""; this.activeResponseId = null; this.effectiveSessionReady = false; this.stopAudioEnergySampler?.(); this.stopAudioEnergySampler = null; resetVoiceAudioEnergy(); const session = this.session; this.session = null; this.connected = false; session?.close(); this.turnController.idle(); }
+  async disconnect() { this.connectGeneration += 1; this.connectPromise = null; this.connectAbortController?.abort(); this.connectAbortController = null; this.clearResponseWatchdogs(); this.clearToolExecutionWatchdog(); this.turnAwaitingTool = false; this.turnResponseRequested = false; this.activeResponseId = null; this.effectiveSessionReady = false; this.stopAudioEnergySampler?.(); this.stopAudioEnergySampler = null; resetVoiceAudioEnergy(); const session = this.session; this.session = null; this.connected = false; session?.close(); this.turnController.idle(); }
   mute(muted: boolean) { this.session?.mute(muted); }
   commitTurn() {
     this.turnController.primaryAction({
       commit: () => {
         this.turnAwaitingTool = true;
-        this.turnTranscriptReady = false;
-        this.turnCaptureActive = true;
         if (this.initialRecommendationPending) {
           this.initialTurnCommitted = true;
         }
         this.record("lifecycle", "started", { turnCommittedAt: this.now() });
         this.session?.transport.sendEvent({ type: "input_audio_buffer.commit" });
-        this.tryRequestForLatestFinalTranscript();
-        if (!this.turnResponseRequested) this.startFinalTranscriptWatchdog();
+        this.requestApplicationResponse();
       },
       interrupt: () => undefined,
     });
@@ -650,23 +654,14 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
   private publishState(state: VoiceState) { this.currentState = state; this.stateListeners.forEach((listener) => listener(state)); }
   private emitTranscript(transcript: TranscriptState) { this.transcriptListeners.forEach((listener) => listener(transcript)); }
   private emitFailure(failure: VoiceConnectionFailure) { this.failureListeners.forEach((listener) => listener(failure)); }
-  private tryRequestForLatestFinalTranscript() {
-    if (!this.turnAwaitingTool || this.turnResponseRequested) return;
-    if (!this.latestFinalUserTranscriptSignature || this.latestFinalUserTranscriptSignature === this.consumedUserTranscriptSignature) return;
-    this.turnTranscriptReady = true;
-    this.consumedUserTranscriptSignature = this.latestFinalUserTranscriptSignature;
-    this.turnCaptureActive = false;
-    this.clearFinalTranscriptWatchdog();
-    this.record("lifecycle", "success", { turnCommittedAt: this.now() });
-    this.requestApplicationResponse();
-  }
   private requestApplicationResponse() {
-    if (!this.session || this.turnResponseRequested || !this.turnAwaitingTool || !this.turnTranscriptReady) return;
+    if (!this.session || this.turnResponseRequested || !this.turnAwaitingTool) return;
     if (!this.effectiveSessionReady || !this.session.transport.requestResponse) {
       this.failPendingTurn("SESSION_CONFIG_NOT_READY");
       return;
     }
     this.turnResponseRequested = true;
+    this.record("lifecycle", "success", { turnCommittedAt: this.now() });
     this.startResponseAckWatchdog();
     this.session.transport.requestResponse?.({ tool_choice: "required", parallel_tool_calls: false });
   }
@@ -702,9 +697,6 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
     if (!this.turnAwaitingTool) return;
     this.turnAwaitingTool = false;
     this.turnResponseRequested = false;
-    this.turnTranscriptReady = false;
-    this.turnCaptureActive = false;
-    if (this.latestFinalUserTranscriptSignature) this.consumedUserTranscriptSignature = this.latestFinalUserTranscriptSignature;
     this.activeResponseId = null;
     this.clearResponseWatchdogs();
     this.clearToolExecutionWatchdog();
@@ -717,23 +709,11 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
     if (this.responseAckWatchdog) clearTimeout(this.responseAckWatchdog);
     this.responseAckWatchdog = null;
   }
-  private startFinalTranscriptWatchdog() {
-    this.clearFinalTranscriptWatchdog();
-    this.finalTranscriptWatchdog = setTimeout(() => {
-      this.finalTranscriptWatchdog = null;
-      if (this.turnAwaitingTool && !this.turnTranscriptReady) this.failPendingTurn("FINAL_USER_TRANSCRIPT_TIMEOUT");
-    }, FINAL_TRANSCRIPT_TIMEOUT_MS);
-  }
-  private clearFinalTranscriptWatchdog() {
-    if (this.finalTranscriptWatchdog) clearTimeout(this.finalTranscriptWatchdog);
-    this.finalTranscriptWatchdog = null;
-  }
   private clearFunctionCallWatchdog() {
     if (this.functionCallWatchdog) clearTimeout(this.functionCallWatchdog);
     this.functionCallWatchdog = null;
   }
   private clearResponseWatchdogs() {
-    this.clearFinalTranscriptWatchdog();
     this.clearResponseAckWatchdog();
     this.clearFunctionCallWatchdog();
     if (this.toolDispatchWatchdog) clearTimeout(this.toolDispatchWatchdog);
@@ -742,6 +722,15 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
   private clearToolExecutionWatchdog() {
     if (this.toolExecutionWatchdog) clearTimeout(this.toolExecutionWatchdog);
     this.toolExecutionWatchdog = null;
+  }
+  private startAudioEnergySamplerIfConnected(session: RealtimeSession) {
+    if (this.stopAudioEnergySampler) return;
+    const transport = session.transport as typeof session.transport & {
+      connectionState?: { status?: string; peerConnection?: RTCPeerConnection };
+    };
+    const connectionState = transport.connectionState;
+    if (connectionState?.status !== "connected" || !connectionState.peerConnection) return;
+    this.stopAudioEnergySampler = startVoiceAudioEnergySampler(connectionState.peerConnection);
   }
   private record(stage: VoiceFailureStage, result: VoiceDiagnostic["result"], extra: Partial<VoiceDiagnostic> = {}) {
     if (!this.options.attemptId || this.options.sessionGeneration === undefined) return;

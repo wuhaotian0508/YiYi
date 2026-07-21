@@ -4,7 +4,7 @@ const sdk = vi.hoisted(() => {
   const defaultEffectiveSession = () => ({
     tool_choice: "required",
     tools: [{ type: "function", name: "request_outfit_recommendation" }],
-    audio: { input: { turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
+    audio: { input: { transcription: { model: "gpt-4o-mini-transcribe", language: "en" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
   });
   const sessions: Array<{
     listeners: Map<string, Set<(...args: unknown[]) => void>>;
@@ -50,6 +50,7 @@ const sdk = vi.hoisted(() => {
       updateSessionConfig: this.updateSessionConfig,
       sendEvent: this.sendEvent,
       requestResponse: this.requestResponse,
+      connectionState: { status: "disconnected", peerConnection: { getStats: vi.fn() } },
     };
     constructor(agent: unknown, options: unknown) { this.agent = agent; this.options = options; sessions.push(this); }
     on(event: string, listener: (...args: unknown[]) => void) {
@@ -58,10 +59,23 @@ const sdk = vi.hoisted(() => {
       this.listeners.set(event, listeners);
     }
     emit(event: string, ...args: unknown[]) { this.listeners.get(event)?.forEach((listener) => listener(...args)); }
-    emitTransport(event: string, ...args: unknown[]) { this.transportListeners.get(event)?.forEach((listener) => listener(...args)); }
+    emitTransport(event: string, ...args: unknown[]) {
+      if (event === "connection_change" && typeof args[0] === "string") this.transport.connectionState.status = args[0];
+      this.transportListeners.get(event)?.forEach((listener) => listener(...args));
+    }
   }
   return { agents, sessions, FakeRealtimeSession, effectiveSession: null as Record<string, unknown> | null };
 });
+
+const audioEnergy = vi.hoisted(() => ({
+  start: vi.fn(() => vi.fn()),
+  reset: vi.fn(),
+}));
+
+vi.mock("@/lib/realtime/audio-energy", () => ({
+  startVoiceAudioEnergySampler: audioEnergy.start,
+  resetVoiceAudioEnergy: audioEnergy.reset,
+}));
 
 vi.mock("@openai/agents/realtime", () => ({
   OpenAIRealtimeWebRTC: class FakeRealtimeWebRTC {
@@ -90,6 +104,8 @@ beforeEach(() => {
   sdk.agents.length = 0;
   sdk.sessions.length = 0;
   sdk.effectiveSession = null;
+  audioEnergy.start.mockClear();
+  audioEnergy.reset.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -209,7 +225,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(session.options).toMatchObject({
       config: {
         toolChoice: "required",
-        audio: { input: { turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
+        audio: { input: { transcription: { model: "gpt-4o-mini-transcribe", language: "en" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
       },
     });
     expect((session.agent as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
@@ -230,61 +246,44 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(session.updateSessionConfig).toHaveBeenLastCalledWith({ toolChoice: "auto" });
   });
 
-  it("owns initial response creation and forces the only eligible recommendation tool", async () => {
+  it("creates the initial response immediately after VAD commits audio without waiting for transcription", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
     await adapter.connect();
     const session = sdk.sessions[0]!;
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
-    expect(session.requestResponse).not.toHaveBeenCalled();
-    session.emit("history_updated", [
-      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
-    ]);
+    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
     expect(session.requestResponse).toHaveBeenCalledOnce();
     expect(session.requestResponse).toHaveBeenCalledWith(expect.objectContaining({
       tool_choice: "required",
       parallel_tool_calls: false,
     }));
 
-    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.completed", event_id: "evt-1", item_id: "user-1", content_index: 0, transcript: "Hiking and dinner." });
     session.emit("history_updated", [
       { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
     ]);
     expect(session.requestResponse).toHaveBeenCalledOnce();
   });
 
-  it("accepts a final transcript that arrives before speech_stopped and never reuses it for a later turn", async () => {
+  it("treats completed and failed input transcription as display diagnostics, never response gating", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
     await adapter.connect();
     const session = sdk.sessions[0]!;
 
-    session.emit("transport_event", { type: "input_audio_buffer.speech_started" });
-    session.emit("history_updated", [
-      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
-    ]);
-    expect(session.requestResponse).not.toHaveBeenCalled();
+    const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
+    const failures: string[] = [];
+    adapter.onTranscript((transcript) => transcripts.push(transcript));
+    adapter.onFailure((failure) => failures.push(failure.code));
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
     expect(session.requestResponse).toHaveBeenCalledOnce();
-
-    const tool = { name: "request_outfit_recommendation" };
-    session.emit("agent_tool_start", {}, {}, tool, { toolCall: { callId: "call-1" } });
-    session.emit("agent_tool_end", {}, {}, tool, JSON.stringify({ success: true, summary: "Ready." }), { toolCall: { callId: "call-1" } });
-    session.emit("audio_stopped");
-
-    session.emit("transport_event", { type: "input_audio_buffer.speech_started" });
-    session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
-    session.emit("history_updated", [
-      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
-    ]);
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.failed", event_id: "evt-failed", item_id: "user-1", content_index: 0, error: { code: "transcription_failed", type: "server_error" } });
+    expect(failures).toEqual([]);
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.completed", event_id: "evt-complete", item_id: "user-1", content_index: 0, transcript: "Hiking and dinner." });
+    expect(transcripts).toContainEqual({ role: "user", text: "Hiking and dinner.", final: true });
     expect(session.requestResponse).toHaveBeenCalledOnce();
-
-    session.emit("history_updated", [
-      { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
-      { itemId: "user-2", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Change the shoes." }] },
-    ]);
-    expect(session.requestResponse).toHaveBeenCalledTimes(2);
   });
 
   it("refuses to listen when the acknowledged server session still owns response creation", async () => {
@@ -353,7 +352,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     adapter.commitTurn?.();
     expect(session.mute).toHaveBeenLastCalledWith(true);
     expect(session.sendEvent).toHaveBeenCalledWith({ type: "input_audio_buffer.commit" });
-    expect(session.requestResponse).not.toHaveBeenCalled();
+    expect(session.requestResponse).toHaveBeenCalledOnce();
     session.emit("history_updated", [
       { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Change the shoes." }] },
     ]);
@@ -468,7 +467,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     ]);
   });
 
-  it("does not return to Listening when assistant audio ends before the required recommendation tool succeeds", async () => {
+  it("does not fail the recommendation when input transcription is delayed beyond ten seconds", async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
@@ -480,14 +479,33 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     const session = sdk.sessions[0]!;
 
     session.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    expect(session.requestResponse).toHaveBeenCalledOnce();
+    session.emit("transport_event", { type: "response.created", response: { id: "resp-1", status: "in_progress" } });
+    session.emit("transport_event", { type: "response.output_item.added", response_id: "resp-1", item: { type: "function_call", name: "request_outfit_recommendation" } });
+    session.emit("agent_tool_start", {}, {}, { name: "request_outfit_recommendation" }, { toolCall: { callId: "call-1" } });
     session.emit("audio_start");
     session.emit("audio_stopped");
     expect(states.at(-1)).not.toBe("listening");
 
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(failures).toEqual(["FINAL_USER_TRANSCRIPT_TIMEOUT"]);
-    expect(states.at(-1)).toBe("recoverable_error");
+    expect(failures).toEqual([]);
+    expect(states.at(-1)).toBe("understanding");
     vi.useRealTimers();
+  });
+
+  it("starts Safari audio energy sampling when connection_change later reaches connected", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers);
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    expect(audioEnergy.start).not.toHaveBeenCalled();
+    session.emitTransport("connection_change", "connected");
+    session.emitTransport("connection_change", "connected");
+    expect(audioEnergy.start).toHaveBeenCalledOnce();
+
+    await adapter.disconnect();
+    expect(audioEnergy.start.mock.results[0]?.value).toHaveBeenCalledOnce();
   });
 
   it("does not clear the unresolved first turn when speech interrupts a running recommendation tool", async () => {

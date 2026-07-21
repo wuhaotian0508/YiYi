@@ -1,5 +1,4 @@
 import { OpenAIRealtimeWebSocket, RealtimeAgent, RealtimeSession, tool } from "@openai/agents/realtime";
-import { z } from "zod";
 
 const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) throw new Error("OPENAI_API_KEY is required for this opt-in live smoke.");
@@ -10,13 +9,19 @@ let toolCalls = 0;
 const recommendationTool = tool({
   name: "request_outfit_recommendation",
   description: "Required first outfit transaction. Extract only concise semantic fields.",
-  parameters: z.object({
-    userRequest: z.string().min(1).max(300),
-    activityPhrases: z.array(z.string().min(1).max(60)).max(8),
-    desiredFeelings: z.array(z.string().min(1).max(50)).max(8),
-    exclusions: z.array(z.string().min(1).max(60)).max(8),
-    wardrobeAnchors: z.array(z.string().min(1).max(80)).max(4),
-  }).strict(),
+  parameters: {
+    type: "object",
+    properties: {
+      userRequest: { type: "string", minLength: 1, maxLength: 300 },
+      activityPhrases: { type: "array", items: { type: "string", minLength: 1, maxLength: 60 }, maxItems: 8 },
+      desiredFeelings: { type: "array", items: { type: "string", minLength: 1, maxLength: 50 }, maxItems: 8 },
+      exclusions: { type: "array", items: { type: "string", minLength: 1, maxLength: 60 }, maxItems: 8 },
+      wardrobeAnchors: { type: "array", items: { type: "string", minLength: 1, maxLength: 80 }, maxItems: 4 },
+    },
+    required: ["userRequest", "activityPhrases", "desiredFeelings", "exclusions", "wardrobeAnchors"],
+    additionalProperties: false,
+  },
+  strict: true,
   execute: async () => {
     toolCalls += 1;
     timeline.toolExecutedMs = Date.now() - startedAt;
@@ -39,7 +44,7 @@ const session = new RealtimeSession(agent, {
     outputModalities: ["text"],
     toolChoice: "required",
     parallelToolCalls: false,
-    audio: { input: { turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
+    audio: { input: { transcription: { model: "gpt-4o-mini-transcribe", language: "en" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
   },
 });
 
@@ -65,7 +70,8 @@ const completed = new Promise((resolve, reject) => {
 try {
   await session.connect({ apiKey });
   timeline.connectedMs = Date.now() - startedAt;
-  session.sendMessage("I have class and a lot of walking. I want to feel relaxed.");
+  transport.sendMessage("I have class and a lot of walking. I want to feel relaxed.", {}, { triggerResponse: false });
+  transport.requestResponse({ tool_choice: "required", parallel_tool_calls: false });
   await completed;
   if (toolCalls !== 1) throw new Error(`LIVE_REALTIME_TOOL_COUNT_${toolCalls}`);
   console.info(JSON.stringify({ event: "yiyi_realtime_live_smoke", success: true, toolCalls, timeline }));
