@@ -26,6 +26,7 @@
   "dependencies": {
     "@gsap/react": "2.1.2",
     "@openai/agents": "0.13.4",
+    "@supabase/supabase-js": "^2.109.0",
     "dexie": "4.4.4",
     "dexie-react-hooks": "4.4.0",
     "gsap": "3.15.0",
