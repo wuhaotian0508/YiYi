@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { cloudConfiguration } from "@/lib/cloud/supabase-client";
-import { preferNewest } from "@/lib/cloud/sync";
+import { parseCloudRecord, preferNewest, serializeCloudRecords } from "@/lib/cloud/sync";
 
 describe("Supabase cloud sync schema", () => {
   it("creates RLS-protected user-scoped tables", async () => {
@@ -22,5 +22,22 @@ describe("cloud synchronization policy", () => {
 
   it("keeps the local record when timestamps are equal", () => {
     expect(preferNewest({ updatedAt: 10, value: "local" }, { updatedAt: 10, value: "remote" })).toEqual({ updatedAt: 10, value: "local" });
+  });
+
+  it("serializes metadata without touching image records", () => {
+    const rows = serializeCloudRecords("user-1", "yiyi_wardrobe_items", [
+      { id: "item-1", updatedAt: 42, category: "tops" },
+    ]);
+
+    expect(rows).toEqual([{ id: "item-1", user_id: "user-1", updated_at: 42, data: { id: "item-1", updatedAt: 42, category: "tops" } }]);
+  });
+
+  it("rejects a remote row owned by another user", () => {
+    expect(parseCloudRecord("user-1", {
+      id: "item-1",
+      user_id: "user-2",
+      updated_at: 42,
+      data: { id: "item-1" },
+    })).toBeNull();
   });
 });

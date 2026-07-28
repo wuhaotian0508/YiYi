@@ -8,6 +8,10 @@ function stale(message = "A newer outfit operation already changed this session.
   throw new RecommendationError("STALE_OPERATION", message);
 }
 
+function scheduleCloudSync() {
+  void import("@/lib/cloud/sync").then(({ queueCloudSync }) => queueCloudSync()).catch(() => undefined);
+}
+
 export async function commitOutfitMutation(input: {
   sessionId: string;
   dateKey: string;
@@ -18,7 +22,7 @@ export async function commitOutfitMutation(input: {
   expectedGeneration: number;
   revisionRequest: string | null;
 }): Promise<{ versionId: string; session: DailySession }> {
-  return db.transaction("rw", db.outfitVersions, db.dailySessions, async () => {
+  const result = await db.transaction("rw", db.outfitVersions, db.dailySessions, async () => {
     const existing = await db.dailySessions.get(input.sessionId);
     if (!existing && (input.baseVersionId !== null || input.expectedGeneration !== 0)) stale("A new session must start from generation zero.");
     if (existing && existing.currentVersionId !== input.baseVersionId) stale();
@@ -66,10 +70,12 @@ export async function commitOutfitMutation(input: {
     await db.dailySessions.put(session);
     return { versionId: version.id, session };
   });
+  scheduleCloudSync();
+  return result;
 }
 
 export async function undoOutfitMutation(input: { sessionId: string; baseVersionId: string; expectedGeneration: number; wardrobe: WardrobeItem[]; profile: PreferenceProfile; weather: WeatherContext | null }) {
-  return db.transaction("rw", db.outfitVersions, db.dailySessions, async () => {
+  const result = await db.transaction("rw", db.outfitVersions, db.dailySessions, async () => {
     const session = await db.dailySessions.get(input.sessionId);
     if (!session || session.currentVersionId !== input.baseVersionId || session.operationGeneration !== input.expectedGeneration) stale();
     const previousVersionId = session.historyVersionIds.at(-1);
@@ -92,10 +98,12 @@ export async function undoOutfitMutation(input: { sessionId: string; baseVersion
     await db.dailySessions.put(updated);
     return { outfit: previous.outfit, versionId: previous.id, session: updated };
   });
+  if (result) scheduleCloudSync();
+  return result;
 }
 
 export async function confirmOutfitMutation(input: { sessionId: string; baseVersionId: string; expectedGeneration: number; outfit: Outfit; updatedProfile: PreferenceProfile }) {
-  return db.transaction("rw", db.dailySessions, db.outfitVersions, db.wardrobeItems, db.preferenceProfiles, async () => {
+  const result = await db.transaction("rw", db.dailySessions, db.outfitVersions, db.wardrobeItems, db.preferenceProfiles, async () => {
     const session = await db.dailySessions.get(input.sessionId);
     if (!session || session.currentVersionId !== input.baseVersionId || session.operationGeneration !== input.expectedGeneration) stale();
     const version = await db.outfitVersions.get(input.baseVersionId);
@@ -108,10 +116,12 @@ export async function confirmOutfitMutation(input: { sessionId: string; baseVers
     await db.wardrobeItems.where("id").anyOf(wornIds).modify({ lastWornAt: now, updatedAt: now });
     return updated;
   });
+  scheduleCloudSync();
+  return result;
 }
 
 export async function resetInvalidOutfitSession(input: { sessionId: string; expectedVersionId: string; expectedGeneration: number }) {
-  return db.transaction("rw", db.dailySessions, async () => {
+  const result = await db.transaction("rw", db.dailySessions, async () => {
     const session = await db.dailySessions.get(input.sessionId);
     if (!session || session.currentVersionId !== input.expectedVersionId || session.operationGeneration !== input.expectedGeneration) stale();
     const updated = DailySessionSchema.parse({
@@ -127,6 +137,8 @@ export async function resetInvalidOutfitSession(input: { sessionId: string; expe
     await db.dailySessions.put(updated);
     return updated;
   });
+  scheduleCloudSync();
+  return result;
 }
 
 export async function updateItemAvailabilityMutation(input: {
@@ -134,7 +146,7 @@ export async function updateItemAvailabilityMutation(input: {
   availability: WardrobeItem["availability"];
   reason: string | null;
 }) {
-  return db.transaction("rw", db.wardrobeItems, async () => {
+  const result = await db.transaction("rw", db.wardrobeItems, async () => {
     const updated = await db.wardrobeItems.update(input.itemId, {
       availability: input.availability,
       unavailableReason: input.reason ?? undefined,
@@ -142,4 +154,6 @@ export async function updateItemAvailabilityMutation(input: {
     });
     return updated ? db.wardrobeItems.toArray() : null;
   });
+  if (result) scheduleCloudSync();
+  return result;
 }

@@ -819,10 +819,10 @@ A service worker is not required for P0. Do not spend time on complex offline su
 Do not use:
 
 - Express;
-- Supabase;
+- Supabase for optional Magic Link metadata sync only; image Blobs remain local in Dexie;
 - Firebase;
 - Prisma;
-- a cloud database;
+- any cloud database other than the approved user-scoped Supabase metadata sync;
 - a separate backend repository;
 - XState;
 - shadcn;
@@ -2682,7 +2682,7 @@ The competition build is done only when:
 6. Accessories included.
 7. AI cutout required.
 8. No clothing-name confirmation.
-9. Local-first Dexie, no account/cloud sync.
+9. Local-first Dexie with optional Magic Link metadata sync; image Blobs never sync.
 10. Native iOS camera/picker, not custom camera.
 11. Official Agents SDK for Realtime.
 12. Terra analyzes items.

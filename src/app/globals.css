@@ -479,6 +479,11 @@ button.attribute-row:active { background:#f7f7f8;transform:scale(.99); }
 .settings-toggle-row > i.on { background: #111; }
 .settings-toggle-row > i.on b { transform: translateX(19px); }
 .settings-version { text-align: center; }
+.cloud-sync-settings { margin-top: 18px; }
+.cloud-sync-form { display: grid; gap: 8px; margin-top: 12px; }
+.cloud-sync-form label, .cloud-sync-account p { font-size: 12px; color: #5f5f65; }
+.cloud-sync-form input { min-height: 42px; border: 1px solid #dedee3; border-radius: 10px; padding: 0 12px; font: inherit; }
+.cloud-sync-account { display: grid; gap: 8px; margin-top: 12px; }
 .memory-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .processing-narrative { width: 100%; }
 .processing-narrative > p { text-align: center; margin: 0 0 34px; }

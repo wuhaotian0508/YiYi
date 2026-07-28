@@ -41,7 +41,7 @@ This repository is a new independent project.
 - Deterministic domain code creates legal candidates.
 - `gpt-5.6` / Sol only ranks supplied candidates.
 - Photoroom removes backgrounds.
-- Vercel Node.js runtime; no Express, Supabase, Firebase or cloud database.
+- Vercel Node.js runtime; no Express or Firebase. Supabase is permitted only for optional, RLS-protected Magic Link sync of non-image metadata.
 - Mock services by default.
 
 ## Engineering rules
@@ -49,6 +49,7 @@ This repository is a new independent project.
 - Validate every external input and AI output with Zod.
 - Never expose an API key in client code.
 - Never persist Data URLs; convert them to Blob.
+- Keep every wardrobe image Blob in Dexie only. Browser Supabase configuration may contain only `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; never expose service-role keys.
 - Never log image/base64/audio data.
 - Centralize taxonomy and visible copy.
 - Do not use `any` to bypass an SDK type.

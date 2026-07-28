@@ -7,7 +7,8 @@ This contract is extracted from `YIYI_MASTER_DEVELOPMENT_SPEC.md`.
 - Next.js App Router, React, strict TypeScript, Tailwind CSS, Motion
 - Zod v4 as the canonical schema source
 - Zustand for ephemeral UI and active-session state only
-- Dexie/IndexedDB for wardrobe, images, preferences, sessions, versions, and jobs
+- Dexie/IndexedDB for the local wardrobe, all image Blobs, preferences, sessions, versions, and jobs
+- Optional Supabase Magic Link and RLS-protected metadata sync; images never leave Dexie through sync
 - OpenAI official JS SDK and `@openai/agents/realtime`
 - Photoroom Basic `/v1/segment`, Sharp normalization, Open-Meteo
 - Vitest, React Testing Library, Playwright Chromium and WebKit
@@ -16,6 +17,10 @@ This contract is extracted from `YIYI_MASTER_DEVELOPMENT_SPEC.md`.
 ## Ownership boundaries
 
 Realtime owns dialogue, intent selection, strict tool calls, turn-taking, interruption, and concise spoken output. Deterministic domain code owns legality, availability, weather safety, candidate generation, preservation, version history, undo, persistence, and stale-response protection. Terra analyzes one normalized clothing cutout. Sol only ranks supplied legal candidate IDs.
+
+## Optional cloud sync
+
+Dexie commits first and always remains usable offline or signed out. A successful local mutation schedules a non-blocking upsert of wardrobe metadata, preference profiles, daily sessions, and outfit versions. Supabase tables are user-scoped through RLS; pull/bootstrap validates JSONB with the canonical Zod schemas and merges newer records only. `itemImages` is never read by sync code.
 
 ## Main pipelines
 

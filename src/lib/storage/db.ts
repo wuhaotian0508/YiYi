@@ -30,6 +30,11 @@ const personalCleanupPendingKey = "personalCleanupPending";
 const legacyOnboardingStorageKey = "yiyi:onboarding-complete";
 const incompleteOnboardingState: OnboardingState = { status: "incomplete", version: 1, completedAt: null, experienceMode: null };
 
+// Cloud failures never affect the successful local Dexie write that triggered them.
+function scheduleCloudSync() {
+  void import("@/lib/cloud/sync").then(({ queueCloudSync }) => queueCloudSync()).catch(() => undefined);
+}
+
 const cannedDemoRuleKeys = new Set([
   "category\u0000heels\u0000hard\u0000avoid",
   "style\u0000overly formal looks\u0000hard\u0000avoid",
@@ -445,7 +450,7 @@ export async function migrateLegacyOnboardingState(storage?: Pick<Storage, "getI
 }
 
 export async function completeOnboarding(input: { mode: ExperienceMode; profile: PreferenceProfile; demoItems: WardrobeItem[] }) {
-  return db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
+  const state = await db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
     const currentItems = await db.wardrobeItems.toArray();
     const personalItems = currentItems.filter((item) => item.dataProvenance !== "demo");
     const effectiveMode: ExperienceMode = input.mode === "demo" && personalItems.length > 0 ? "personal" : input.mode;
@@ -476,6 +481,8 @@ export async function completeOnboarding(input: { mode: ExperienceMode; profile:
     await writeOnboardingState(state);
     return state;
   });
+  scheduleCloudSync();
+  return state;
 }
 
 export async function setExperienceMode(mode: ExperienceMode, resetDemoSeed = false) {
@@ -547,7 +554,7 @@ export async function verifyPersonalWardrobeItemSave(itemId: string) {
 }
 
 export async function finalizePersonalWardrobeMigration() {
-  return db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
+  await db.transaction("rw", [db.appSettings, db.wardrobeItems, db.itemImages, db.preferenceProfiles, db.dailySessions, db.outfitVersions], async () => {
     const storedIds = (await db.appSettings.get(demoItemIdsKey))?.value;
     let parsedIds: unknown = [];
     if (typeof storedIds === "string") {
@@ -572,6 +579,7 @@ export async function finalizePersonalWardrobeMigration() {
     await db.appSettings.delete(demoItemIdsKey);
     await db.appSettings.put({ key: personalCleanupPendingKey, value: false });
   });
+  scheduleCloudSync();
 }
 
 /**
@@ -633,6 +641,7 @@ export async function savePersonalWardrobeItem(item: WardrobeItem, images: ItemI
   }
 
   await verifyPersonalWardrobeItemSave(item.id);
+  scheduleCloudSync();
   return { itemId: item.id, alreadySaved, originalStored, cleanupPending };
 }
 
@@ -689,6 +698,7 @@ export async function seedPreferences(profile: PreferenceProfile) {
 
 export async function savePreferences(profile: PreferenceProfile) {
   await db.preferenceProfiles.put(profile);
+  scheduleCloudSync();
 }
 
 export async function requestPersistentStorage() {

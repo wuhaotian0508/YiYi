@@ -21,6 +21,17 @@ pnpm verify
 pnpm test:e2e
 ```
 
+## Optional Supabase sync
+
+Wardrobe image Blobs stay in Dexie/IndexedDB. Optional Supabase Magic Link sign-in syncs only wardrobe metadata, preferences, and outfit history between devices. Apply `supabase/migrations/20260722190000_create_yiyi_cloud_sync.sql`, set Supabase Auth Site/redirect URLs to the deployed site, and configure these Vercel variables for Production, Preview, and Development:
+
+```dotenv
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+```
+
+Never use a service-role key in browser or Vercel public variables. Signed-out YiYi remains fully local.
+
 ## Architecture
 
 Zod schemas define the contracts. One constraint-first TypeScript decision pipeline merges context, starts search from required/preserved anchors, generates legal separates or one-piece templates, scores context/personalization/compatibility/comfort/novelty, and owns versioned revisions and undo. GPT-5.6 Terra analyzes one item; GPT-5.6 Sol visually evaluates only supplied legal candidates; OpenAI Realtime emits validated structured deltas through the official Agents SDK. Wardrobe data remains local in Dexie/IndexedDB.
