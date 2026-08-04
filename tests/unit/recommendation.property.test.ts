@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
 import { validateOutfit } from "@/domain/recommendation/constraints";
@@ -7,6 +7,14 @@ import { runRecommendationDecision } from "@/domain/recommendation/engine";
 import { normalizedWeightsFor, outfitComfortPerformance, outfitThermalPerformance } from "@/domain/recommendation/scoring";
 import { IntentDeltaSchema, type IntentDelta, type WardrobeItem } from "@/domain/schemas";
 import { demoIntent, demoWardrobe } from "@/mocks/wardrobe";
+
+/**
+ * Every property here replays dozens of full recommendation decisions, which
+ * does not fit the 5s default once the suite runs files in parallel — the
+ * failures move between properties depending on machine load. Budget generously
+ * rather than shrinking numRuns, which would weaken the properties themselves.
+ */
+vi.setConfig({ testTimeout: 60_000 });
 
 const zeroAdjustments = { formality: 0, warmth: 0, comfort: 0, colorfulness: 0, walkingPriority: 0, layering: 0, structure: 0 };
 
@@ -106,9 +114,7 @@ describe("recommendation invariants", () => {
       }).deterministicAnswer;
       expect(random.id).not.toBe(first.id);
     }), { numRuns: 40 });
-    // 40 runs x 3 full decisions does not fit the 5s default once the suite
-    // runs files in parallel, and shrinking numRuns would weaken the property.
-  }, 20_000);
+  });
 
   it("keeps thermal and intrinsic comfort semantics invariant under irrelevant context changes", () => {
     fc.assert(fc.property(fc.integer({ min: 1, max: 5 }), fc.integer({ min: 1, max: 4 }), (bagWarmth, walkingIntensity) => {

@@ -1,10 +1,14 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { sendMagicLink } = vi.hoisted(() => ({ sendMagicLink: vi.fn() }));
+const { completeCloudSignIn, sendMagicLink } = vi.hoisted(() => ({
+  completeCloudSignIn: vi.fn(),
+  sendMagicLink: vi.fn(),
+}));
 
 vi.mock("@/lib/cloud/supabase-client", () => ({ cloudConfiguration: () => ({ configured: true }) }));
 vi.mock("@/lib/cloud/auth", () => ({
+  completeCloudSignIn,
   getCloudSession: vi.fn().mockResolvedValue(null),
   sendMagicLink,
   signOutCloud: vi.fn(),
@@ -25,6 +29,7 @@ describe("CloudSyncSettings", () => {
 
   beforeEach(() => {
     sendMagicLink.mockClear();
+    completeCloudSignIn.mockResolvedValue({ status: "no_callback" });
     window.history.replaceState({}, "", "/");
   });
 
@@ -43,5 +48,19 @@ describe("CloudSyncSettings", () => {
     window.history.replaceState({}, "", "/settings");
     await requestLink();
     expect(sendMagicLink).toHaveBeenCalledWith("person@example.com", `${window.location.origin}/settings`);
+  });
+
+  /** A dead link previously just re-rendered the form, giving no reason at all. */
+  it("reports why a sign-in link failed instead of silently showing the form again", async () => {
+    completeCloudSignIn.mockResolvedValue({ status: "failed", message: "Email link is invalid or has expired" });
+    render(<CloudSyncSettings />);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("Email link is invalid or has expired");
+  });
+
+  it("shows the signed-in address once a link is redeemed", async () => {
+    completeCloudSignIn.mockResolvedValue({ status: "signed_in", session: { user: { email: "person@example.com" } } });
+    render(<CloudSyncSettings />);
+    expect(await screen.findByText("Signed in as person@example.com")).toBeTruthy();
   });
 });

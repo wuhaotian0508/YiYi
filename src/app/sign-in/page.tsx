@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { YiYiMark } from "@/components/brand/yiyi-mark";
 import { SecondaryButton } from "@/components/ui/buttons";
 import { CloudSignInForm } from "@/components/cloud/cloud-sign-in-form";
-import { getCloudSession, subscribeToCloudAuth } from "@/lib/cloud/auth";
+import { completeCloudSignIn, getCloudSession, subscribeToCloudAuth } from "@/lib/cloud/auth";
 import { cloudConfiguration } from "@/lib/cloud/supabase-client";
 import { bootstrapCloudSync } from "@/lib/cloud/sync";
 import { dismissCloudSignInPrompt } from "@/lib/storage/db";
@@ -19,13 +19,18 @@ function destinationFrom(search: string) {
 export default function SignInPage() {
   const router = useRouter();
   const destination = useRef("/today");
+  const [callbackError, setCallbackError] = useState("");
 
   useEffect(() => {
     const target = destinationFrom(window.location.search);
     destination.current = target;
     if (!cloudConfiguration().configured) { router.replace(target); return; }
     let active = true;
-    void getCloudSession().then((session) => { if (active && session) router.replace(target); }).catch(() => undefined);
+    void completeCloudSignIn().then(async (outcome) => {
+      if (!active) return;
+      if (outcome.status === "failed") { setCallbackError(outcome.message); return; }
+      if (outcome.status === "signed_in" || await getCloudSession()) router.replace(target);
+    }).catch(() => undefined);
     const unsubscribe = subscribeToCloudAuth((event) => {
       if (!active || event !== "SIGNED_IN") return;
       void bootstrapCloudSync().catch(() => undefined);
@@ -45,6 +50,7 @@ export default function SignInPage() {
       <h1 className="page-title setup-title">Keep YiYi with you.</h1>
       <p className="body-copy setup-copy">Sign in to sync wardrobe details, preferences, and outfit history across your devices. Images stay on this device.</p>
     </div></div>
+    {callbackError && <p className="secondary-copy" role="alert">That sign-in link didn’t work: {callbackError}</p>}
     <div className="setup-actions">
       <CloudSignInForm />
       <SecondaryButton onClick={() => void skip()}>Not now</SecondaryButton>
