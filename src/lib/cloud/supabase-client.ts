@@ -21,7 +21,7 @@ export function getSupabaseClient(): SupabaseClient | null {
   const configuration = cloudConfiguration();
   client = configuration.configured
     ? createClient(configuration.url, configuration.key, {
-      auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true },
+      auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     })
     : null;
   return client;

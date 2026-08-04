@@ -106,7 +106,9 @@ describe("recommendation invariants", () => {
       }).deterministicAnswer;
       expect(random.id).not.toBe(first.id);
     }), { numRuns: 40 });
-  });
+    // 40 runs x 3 full decisions does not fit the 5s default once the suite
+    // runs files in parallel, and shrinking numRuns would weaken the property.
+  }, 20_000);
 
   it("keeps thermal and intrinsic comfort semantics invariant under irrelevant context changes", () => {
     fc.assert(fc.property(fc.integer({ min: 1, max: 5 }), fc.integer({ min: 1, max: 4 }), (bagWarmth, walkingIntensity) => {
