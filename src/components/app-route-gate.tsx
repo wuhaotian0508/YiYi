@@ -10,6 +10,17 @@ function isProtectedRoute(pathname: string) {
   return protectedRoots.some((root) => pathname === root || pathname.startsWith(`${root}/`));
 }
 
+/**
+ * Loaded on demand so the Supabase client stays out of every route's initial
+ * bundle. Without a configured URL the import never happens at all, matching
+ * how db.ts defers its cloud sync import.
+ */
+async function cloudSignInPromptWanted() {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return false;
+  const { shouldPromptCloudSignIn } = await import("@/lib/cloud/sign-in-prompt");
+  return shouldPromptCloudSignIn();
+}
+
 export function AppRouteGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -19,14 +30,20 @@ export function AppRouteGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     if (!gated) return;
-    void migrateLegacyOnboardingState().then((state) => {
+    void migrateLegacyOnboardingState().then(async (state) => {
+      if (cancelled) return;
+      if (isProtectedRoute(pathname) && state.status !== "complete") {
+        router.replace("/");
+        return;
+      }
+      if (state.status === "complete" && await cloudSignInPromptWanted()) {
+        if (cancelled) return;
+        router.replace(`/sign-in?next=${encodeURIComponent(pathname === "/" ? "/today" : pathname)}`);
+        return;
+      }
       if (cancelled) return;
       if (pathname === "/" && state.status === "complete") {
         router.replace("/today");
-        return;
-      }
-      if (isProtectedRoute(pathname) && state.status !== "complete") {
-        router.replace("/");
         return;
       }
       setDecision({ pathname, allowed: true });

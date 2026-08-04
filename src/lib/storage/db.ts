@@ -719,6 +719,16 @@ export async function setSoundEnabled(enabled: boolean) {
   await db.appSettings.put({ key: soundEnabledKey, value: enabled });
 }
 
+const cloudSignInPromptKey = "cloudSignInPromptDismissed";
+
+export async function getCloudSignInPromptDismissed() {
+  return (await db.appSettings.get(cloudSignInPromptKey))?.value === true;
+}
+
+export async function dismissCloudSignInPrompt() {
+  await db.appSettings.put({ key: cloudSignInPromptKey, value: true });
+}
+
 /** Deletes YiYi's IndexedDB records and only YiYi-owned web storage keys. */
 export async function resetAllLocalAppData() {
   await db.delete();
