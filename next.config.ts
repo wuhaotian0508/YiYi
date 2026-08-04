@@ -1,5 +1,15 @@
 import type { NextConfig } from "next";
 
+const supabaseOrigin = (() => {
+  const configured = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  if (!configured) return "";
+  try {
+    return new URL(configured).origin;
+  } catch {
+    return "";
+  }
+})();
+
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
@@ -19,7 +29,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' blob: data:",
       "media-src 'self' blob:",
-      "connect-src 'self' https://api.openai.com wss://api.openai.com",
+      `connect-src 'self' https://api.openai.com wss://api.openai.com${supabaseOrigin ? ` ${supabaseOrigin}` : ""}`,
       "worker-src 'self' blob:",
       "font-src 'self' data:",
       "manifest-src 'self'",
