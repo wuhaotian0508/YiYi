@@ -21,7 +21,9 @@ export function getSupabaseClient(): SupabaseClient | null {
   const configuration = cloudConfiguration();
   client = configuration.configured
     ? createClient(configuration.url, configuration.key, {
-      auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+      // completeCloudSignIn redeems the code so failures can be reported; the
+      // built-in detection would consume it first and swallow the reason.
+      auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
     })
     : null;
   return client;

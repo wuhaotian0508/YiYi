@@ -1,4 +1,4 @@
-import { getCloudSession } from "@/lib/cloud/auth";
+import { getCloudSession, hasCloudCallbackParameters } from "@/lib/cloud/auth";
 import { cloudConfiguration } from "@/lib/cloud/supabase-client";
 import { getCloudSignInPromptDismissed } from "@/lib/storage/db";
 
@@ -8,13 +8,12 @@ import { getCloudSignInPromptDismissed } from "@/lib/storage/db";
  * — no configuration, no network, an existing session, a previous dismissal, or
  * an unreachable Supabase — lets the route through untouched.
  *
- * getCloudSession awaits client initialisation, which is what exchanges a
- * `?code=` Magic Link parameter for a session. Calling it here means a route
- * landed on straight from an email link resolves its session before this
- * decides whether to redirect.
+ * A landing that still carries Magic Link parameters is left alone: the page
+ * itself redeems the code, and redirecting first would strip it from the URL.
  */
 export async function shouldPromptCloudSignIn(): Promise<boolean> {
   if (!cloudConfiguration().configured) return false;
+  if (hasCloudCallbackParameters()) return false;
   if (typeof navigator !== "undefined" && !navigator.onLine) return false;
   if (await getCloudSignInPromptDismissed()) return false;
   try {
