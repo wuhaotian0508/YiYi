@@ -27,6 +27,7 @@ import { calmSpring } from "@/lib/motion/tokens";
 import { MockVoiceSessionAdapter, OpenAIRealtimeVoiceAdapter, resolveAvailabilityItemId, type VoiceToolHandlers, type VoiceTurnAction } from "@/lib/realtime/voice-session";
 import { voiceSessionCoordinator, voiceSessionServerSnapshot, type VoiceLifecycleStatus, type VoiceSessionSnapshot } from "@/lib/realtime/voice-session-coordinator";
 import { persistPreferenceDelta } from "@/lib/preferences/profile-storage";
+import { BrowserPreferenceVoiceAdapter } from "@/lib/realtime/preference-voice-adapter";
 import { rankOutfits } from "@/lib/recommendation/client-ranking";
 import { RecommendationOperationController, runCommitPhase, type OperationToken } from "@/lib/recommendation/operation-controller";
 import { commitOutfitMutation, confirmOutfitMutation, resetInvalidOutfitSession, undoOutfitMutation, updateItemAvailabilityMutation } from "@/lib/recommendation/session-mutations";
@@ -254,6 +255,7 @@ export function TodayPage() {
       wardrobeAnchors: [],
     }, wardrobeRef.current);
     void runRecommendation(nextIntent, nextTranscript.text);
+    void voiceSessionCoordinator.stop("today", "user");
   // runRecommendation reads current refs and is intentionally triggered only by a new final mock transcript.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceSnapshot.generation, voiceSnapshot.latestUserTranscript, voiceSnapshot.owner]);
@@ -575,7 +577,9 @@ export function TodayPage() {
     try {
       await voiceSessionCoordinator.start("today", ({ attemptId, generation }) => process.env.NEXT_PUBLIC_VOICE_MODE === "live"
         ? new OpenAIRealtimeVoiceAdapter(createHandlers(generation), { attemptId, sessionGeneration: generation, purpose: "today", requireInitialRecommendation: !resumeExisting })
-        : new MockVoiceSessionAdapter(autoMock && !resumeExisting));
+        : process.env.NEXT_PUBLIC_VOICE_MODE === "browser"
+          ? new BrowserPreferenceVoiceAdapter()
+          : new MockVoiceSessionAdapter(autoMock && !resumeExisting));
     } catch {
       clearSessionTimers();
       setPhase(currentRef.current ? "paused" : "error");
@@ -600,7 +604,7 @@ export function TodayPage() {
   const activeVoice = voiceSnapshot.owner === "today" && ["connecting", "listening", "committing", "understanding", "tool_running", "revising", "speaking", "interrupted"].includes(voiceSnapshot.status);
   const visualState = voiceVisualState(phase, voiceSnapshot.status, activeVoiceAction);
   const status = voiceStatus(phase, voiceSnapshot, activeVoiceAction);
-  const isMock = process.env.NEXT_PUBLIC_VOICE_MODE !== "live";
+  const isMock = process.env.NEXT_PUBLIC_VOICE_MODE !== "live" && process.env.NEXT_PUBLIC_VOICE_MODE !== "browser";
   return (
     <main className="phone-page today-page pager-page">
       <Swiper
