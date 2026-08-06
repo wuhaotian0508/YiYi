@@ -98,7 +98,7 @@ export class BrowserPreferenceVoiceAdapter implements VoiceSessionAdapter {
     const Constructor = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
     if (!Constructor) throw new VoiceConnectionFailure({ stage: "session", code: "SPEECH_RECOGNITION_UNAVAILABLE" });
     const recognition = new Constructor();
-    recognition.lang = "en-US";
+    recognition.lang = navigator.language || "en-US";
     recognition.interimResults = false;
     recognition.continuous = false;
     recognition.onresult = (event) => {

@@ -28,6 +28,7 @@ import { MockVoiceSessionAdapter, OpenAIRealtimeVoiceAdapter, resolveAvailabilit
 import { voiceSessionCoordinator, voiceSessionServerSnapshot, type VoiceLifecycleStatus, type VoiceSessionSnapshot } from "@/lib/realtime/voice-session-coordinator";
 import { persistPreferenceDelta } from "@/lib/preferences/profile-storage";
 import { BrowserPreferenceVoiceAdapter } from "@/lib/realtime/preference-voice-adapter";
+import { interpretBrowserVoiceTranscript } from "@/lib/realtime/browser-voice-language";
 import { rankOutfits } from "@/lib/recommendation/client-ranking";
 import { RecommendationOperationController, runCommitPhase, type OperationToken } from "@/lib/recommendation/operation-controller";
 import { commitOutfitMutation, confirmOutfitMutation, resetInvalidOutfitSession, undoOutfitMutation, updateItemAvailabilityMutation } from "@/lib/recommendation/session-mutations";
@@ -247,16 +248,19 @@ export function TodayPage() {
     if (handledTranscriptRef.current === key) return;
     handledTranscriptRef.current = key;
     setResultTranscript(nextTranscript.text);
-    const nextIntent = buildDailyIntentFromVoiceRequest({
-      userRequest: nextTranscript.text,
-      activityPhrases: [],
-      desiredFeelings: [],
-      exclusions: [],
-      wardrobeAnchors: [],
-    }, wardrobeRef.current);
-    void runRecommendation(nextIntent, nextTranscript.text);
+    void (async () => {
+      const request = await interpretBrowserVoiceTranscript(nextTranscript.text).catch(() => ({
+        userRequest: nextTranscript.text,
+        activityPhrases: [],
+        desiredFeelings: [],
+        exclusions: [],
+        wardrobeAnchors: [],
+      }));
+      const nextIntent = buildDailyIntentFromVoiceRequest(request, wardrobeRef.current);
+      void runRecommendation(nextIntent, nextTranscript.text);
+    })();
     void voiceSessionCoordinator.stop("today", "user");
-  // runRecommendation reads current refs and is intentionally triggered only by a new final mock transcript.
+  // runRecommendation reads current refs and is intentionally triggered only by a new final browser transcript.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceSnapshot.generation, voiceSnapshot.latestUserTranscript, voiceSnapshot.owner]);
 
@@ -415,14 +419,17 @@ export function TodayPage() {
   const runRecommendation = (nextIntent: DailyIntent, utterance: string) => executeDecision({ operation: "initial", nextIntent, utterance });
   function recommendFromEditedTranscript(nextText: string) {
     setResultTranscript(nextText);
-    const nextIntent = buildDailyIntentFromVoiceRequest({
-      userRequest: nextText,
-      activityPhrases: [],
-      desiredFeelings: [],
-      exclusions: [],
-      wardrobeAnchors: [],
-    }, wardrobeRef.current);
-    void runRecommendation(nextIntent, nextText);
+    void (async () => {
+      const request = await interpretBrowserVoiceTranscript(nextText).catch(() => ({
+        userRequest: nextText,
+        activityPhrases: [],
+        desiredFeelings: [],
+        exclusions: [],
+        wardrobeAnchors: [],
+      }));
+      const nextIntent = buildDailyIntentFromVoiceRequest(request, wardrobeRef.current);
+      void runRecommendation(nextIntent, nextText);
+    })();
   }
   const revise = (slot: OutfitSlot = "bag", request = `Choose another ${slot}.`) => executeDecision({ operation: "targeted_revision", delta: targetedDelta(slot, request), utterance: request });
   const randomizeOutfit = () => executeDecision({ operation: "random_new_outfit", delta: randomDelta(), utterance: "Choose a different outfit for the same day." });

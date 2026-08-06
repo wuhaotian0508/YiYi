@@ -53,6 +53,17 @@ describe("BrowserPreferenceVoiceAdapter", () => {
     expect(getUserMedia).toHaveBeenCalledTimes(1);
   });
 
+  it("uses the browser language so Chinese voice can be transcribed", async () => {
+    const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] }));
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
+    Object.defineProperty(navigator, "language", { configurable: true, value: "zh-CN" });
+    Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: FakeRecognition });
+
+    await new BrowserPreferenceVoiceAdapter().connect();
+
+    expect(FakeRecognition.latest?.lang).toBe("zh-CN");
+  });
+
   it("does not turn the normal end after a final mock transcript into an error", async () => {
     const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] }));
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });

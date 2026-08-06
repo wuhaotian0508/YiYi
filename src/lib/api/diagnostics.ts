@@ -1,6 +1,6 @@
 export type ApiDiagnostic = {
   requestId: string;
-  route: "/api/realtime/token" | "/api/wardrobe/process" | "/api/outfits/rank" | "/api/weather";
+  route: "/api/realtime/token" | "/api/wardrobe/process" | "/api/outfits/rank" | "/api/weather" | "/api/voice/interpret";
   provider: "openai-realtime" | "openai-responses" | "photoroom" | "open-meteo" | "application";
   model?: string;
   outcome: "success" | "error";
