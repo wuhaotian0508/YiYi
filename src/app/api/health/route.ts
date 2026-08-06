@@ -10,7 +10,7 @@ export function GET() {
     openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
     photoroomConfigured: Boolean(process.env.PHOTOROOM_API_KEY),
     aiMode: process.env.AI_MODE === "live" ? "live" : "mock",
-    voiceMode: process.env.NEXT_PUBLIC_VOICE_MODE === "live" ? "live" : "mock",
+    voiceMode: process.env.NEXT_PUBLIC_VOICE_MODE === "browser" ? "browser" : process.env.NEXT_PUBLIC_VOICE_MODE === "live" ? "live" : "mock",
     itemModel: process.env.OPENAI_ITEM_MODEL ?? "gpt-5.6-terra",
     rankModel: process.env.OPENAI_RANK_MODEL ?? "gpt-5.6",
     realtimeModel: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-mini",

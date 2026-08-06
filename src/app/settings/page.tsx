@@ -58,7 +58,7 @@ export default function SettingsPage() {
   }
 
   const sections = [
-    ["Voice", process.env.NEXT_PUBLIC_VOICE_MODE === "live" ? "Marin · Live" : "Marin · Demo"],
+    ["Voice", process.env.NEXT_PUBLIC_VOICE_MODE === "live" ? "Marin · Live" : process.env.NEXT_PUBLIC_VOICE_MODE === "browser" ? "Browser speech" : "Marin · Demo"],
     ["Weather", weatherLabel()],
     ["Storage", storage],
     ["Privacy", "Selected images are sent only for processing"],
