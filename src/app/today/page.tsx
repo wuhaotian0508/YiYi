@@ -12,6 +12,7 @@ import { OutfitCanvas } from "@/components/outfit/outfit-canvas";
 import { PrimaryButton, SecondaryButton } from "@/components/ui/buttons";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { VoiceCore, VoiceDock, type VoiceVisualState } from "@/components/voice/voice-core";
+import { EditableVoiceTranscript } from "@/components/voice/editable-voice-transcript";
 import { copy } from "@/content/copy";
 import { createNeutralPreferenceProfile } from "@/domain/preferences/defaults";
 import { updateProfileFromOutfitFeedback } from "@/domain/preferences/feedback";
@@ -94,6 +95,7 @@ export function TodayPage() {
   const [phase, setPhase] = useState<Phase>("idle");
   const voiceSnapshot = useSyncExternalStore(voiceSessionCoordinator.subscribe, voiceSessionCoordinator.getSnapshot, voiceSessionServerSnapshot);
   const transcript = voiceSnapshot.owner === "today" ? voiceSnapshot.latestUserTranscript?.text ?? "" : "";
+  const [resultTranscript, setResultTranscript] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([]);
   const [intent, setIntent] = useState<DailyIntent>(() => emptyDailyIntent());
@@ -243,6 +245,7 @@ export function TodayPage() {
     const key = `${voiceSnapshot.generation}:${nextTranscript.text}`;
     if (handledTranscriptRef.current === key) return;
     handledTranscriptRef.current = key;
+    setResultTranscript(nextTranscript.text);
     const nextIntent = buildDailyIntentFromVoiceRequest({
       userRequest: nextTranscript.text,
       activityPhrases: [],
@@ -408,6 +411,17 @@ export function TodayPage() {
   }
 
   const runRecommendation = (nextIntent: DailyIntent, utterance: string) => executeDecision({ operation: "initial", nextIntent, utterance });
+  function recommendFromEditedTranscript(nextText: string) {
+    setResultTranscript(nextText);
+    const nextIntent = buildDailyIntentFromVoiceRequest({
+      userRequest: nextText,
+      activityPhrases: [],
+      desiredFeelings: [],
+      exclusions: [],
+      wardrobeAnchors: [],
+    }, wardrobeRef.current);
+    void runRecommendation(nextIntent, nextText);
+  }
   const revise = (slot: OutfitSlot = "bag", request = `Choose another ${slot}.`) => executeDecision({ operation: "targeted_revision", delta: targetedDelta(slot, request), utterance: request });
   const randomizeOutfit = () => executeDecision({ operation: "random_new_outfit", delta: randomDelta(), utterance: "Choose a different outfit for the same day." });
 
@@ -624,7 +638,7 @@ export function TodayPage() {
           <AnimatePresence initial={false} mode="popLayout">
             {phase === "idle" && <Idle key="idle" hydrated={hydrated} recoveryMessage={recoveryMessage} />}
             {["connecting", "listening", "understanding", "generating"].includes(phase) && <Listening key="listening" phase={phase} transcript={transcript} tags={tags} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }} isMock={isMock} onUseDemo={() => voiceSessionCoordinator.submitDemoTurn("today")} />}
-            {(phase === "presenting" || phase === "revising") && current && <Result key="result" current={current} wardrobe={wardrobe} reason={reason} phase={phase} tags={tags} focusedSlot={focusedSlot} onFocus={setFocusedSlot} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }} onRevise={revise} onUndo={() => void undo()} canUndo={history.length > 0} onRandom={() => void randomizeOutfit()} onConfirm={() => void confirmCurrent()} />}
+            {(phase === "presenting" || phase === "revising") && current && <ResultWithTranscript key="result" current={current} wardrobe={wardrobe} reason={reason} phase={phase} tags={tags} transcript={resultTranscript} onEditTranscript={recommendFromEditedTranscript} focusedSlot={focusedSlot} onFocus={setFocusedSlot} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }} onRevise={revise} onUndo={() => void undo()} canUndo={history.length > 0} onRandom={() => void randomizeOutfit()} onConfirm={() => void confirmCurrent()} />}
             {phase === "paused" && <Paused key="paused" current={current} wardrobe={wardrobe} />}
             {phase === "confirmed" && current && <Confirmed key="confirmed" current={current} wardrobe={wardrobe} onRevise={() => setPhase("presenting")} onOpenWardrobe={() => pagerRef.current?.slideTo(1)} />}
             {phase === "error" && <ErrorState key="error" voice={voiceSnapshot} />}
@@ -684,7 +698,13 @@ function Listening({ phase, transcript, tags, onEditTag, isMock, onUseDemo }: { 
   return <MotionSection className="today-content session-content"><div className="session-timeline" aria-label="Voice progress"><span className={timeline >= 1 ? "active" : ""}>Listening</span><i /><span className={timeline >= 2 ? "active" : ""}>Understanding</span><i /><span className={timeline >= 3 ? "active" : ""}>Choosing</span></div><div className="session-focus"><AnimatePresence mode="wait">{showTranscript ? <motion.div key="transcript" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(-4px)" }}><p className="eyebrow">Your day</p><h1 className="live-transcript">{transcript ? `“${transcript}”` : "I’m listening. Take your time."}</h1>{isMock && phase === "listening" && <button className="demo-turn-button" onClick={onUseDemo}>Continue with the demo day</button>}</motion.div> : <motion.div key="intent" initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(7px)" }} animate={{ opacity: 1, transform: "translateY(0)" }}><p className="eyebrow">What YiYi understood</p><LayoutGroup id="today-intent-tags"><motion.div className="chip-row understood-tags" layout><AnimatePresence initial={false} mode="popLayout">{tags.map((tag) => <motion.button className="chip" layout key={tag.id} onClick={() => onEditTag(tag)} initial={{ opacity: 0, transform: "scale(.97)" }} animate={{ opacity: 1, transform: "scale(1)" }} exit={{ opacity: 0, transform: "scale(.97)" }} transition={{ duration: reduceMotion ? .1 : .18, ease: [.23, 1, .32, 1] }}>{tag.label}</motion.button>)}</AnimatePresence></motion.div></LayoutGroup></motion.div>}</AnimatePresence></div><div className="dock-spacer" /></MotionSection>;
 }
 
-function Result({ current, wardrobe, reason, phase, tags, focusedSlot, onFocus, onEditTag, onRevise, onUndo, canUndo, onRandom, onConfirm }: { current: Outfit; wardrobe: WardrobeItem[]; reason: string; phase: "presenting" | "revising"; tags: IntentTag[]; focusedSlot: OutfitSlot | null; onFocus: (slot: OutfitSlot) => void; onEditTag: (tag: IntentTag) => void; onRevise: (slot?: OutfitSlot) => void; onUndo: () => void; canUndo: boolean; onRandom: () => void; onConfirm: () => void }) {
+type ResultProps = { current: Outfit; wardrobe: WardrobeItem[]; reason: string; phase: "presenting" | "revising"; tags: IntentTag[]; focusedSlot: OutfitSlot | null; onFocus: (slot: OutfitSlot) => void; onEditTag: (tag: IntentTag) => void; onRevise: (slot?: OutfitSlot) => void; onUndo: () => void; canUndo: boolean; onRandom: () => void; onConfirm: () => void };
+
+function ResultWithTranscript({ transcript, onEditTranscript, ...resultProps }: ResultProps & { transcript: string; onEditTranscript: (text: string) => void }) {
+  return <><Result {...resultProps} />{transcript && <EditableVoiceTranscript text={transcript} onCommit={onEditTranscript} onCancel={() => undefined} />}</>;
+}
+
+function Result({ current, wardrobe, reason, phase, tags, focusedSlot, onFocus, onEditTag, onRevise, onUndo, canUndo, onRandom, onConfirm }: ResultProps) {
   const reduceMotion = useReducedMotionConfig();
   const mutationLocked = phase === "revising";
   return <MotionSection className="today-content result-section"><header className="result-heading"><p className="eyebrow">Today’s answer</p><h1>{copy.outfit.main}</h1><motion.p key={reason} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .18 }}>{reason}</motion.p></header><div className="intent-strip">{tags.map((tag) => <button className="chip" disabled={mutationLocked} key={tag.id} onClick={() => onEditTag(tag)}>{tag.label}</button>)}</div><div className="single-outfit-stage"><AnimatePresence initial={false}>{phase === "revising" && <motion.div className="revision-bubble" initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(5px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={{ opacity: 0 }} transition={{ duration: .18 }}>Keeping every unmentioned piece still.</motion.div>}</AnimatePresence><OutfitCanvas outfit={current} wardrobe={wardrobe} onSelect={mutationLocked ? undefined : onFocus} /><AnimatePresence initial={false}>{phase === "revising" && <motion.div className="revision-focus-ring" data-slot={focusedSlot ?? "bag"} initial={{ opacity: 0, transform: "scale(.96)" }} animate={{ opacity: 1, transform: "scale(1)" }} exit={{ opacity: 0 }} transition={{ duration: .18 }} />}</AnimatePresence></div><AnimatePresence initial={false} mode="popLayout">{focusedSlot && <motion.div className="focused-item" key={focusedSlot} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(6px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={{ opacity: 0 }} transition={{ duration: .18 }}><span>Revise this {focusedSlot === "extraAccessory" ? "accessory" : focusedSlot}</span><SecondaryButton disabled={mutationLocked} onClick={() => onRevise(focusedSlot)}>Replace</SecondaryButton></motion.div>}</AnimatePresence><div className="result-command-row"><button disabled={!canUndo || mutationLocked} onClick={onUndo}><Undo2 size={16} />Undo</button><button disabled={mutationLocked} onClick={onRandom}><Shuffle size={16} />Another</button></div><PrimaryButton className="wear-button" disabled={mutationLocked} onClick={onConfirm}><Check size={17} />{copy.outfit.wear}</PrimaryButton><div className="dock-spacer compact" /></MotionSection>;

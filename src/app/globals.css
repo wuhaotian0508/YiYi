@@ -420,6 +420,21 @@ button.attribute-row:active { background:#f7f7f8;transform:scale(.99); }
 .result-heading { padding: 8px 0 0; }
 .result-heading h1 { font-size: 21px; line-height: 1.1; }
 .result-heading > p:last-child { color: #77777d; font-size: 13px; line-height: 1.4; }
+.editable-voice-transcript { width: min(100%, 330px); margin: 14px auto 0; padding: 12px 14px 10px; border: 1px solid #e1e1e5; border-radius: 18px; background: #fff; box-shadow: 0 5px 18px rgb(17 17 17 / .035); }
+.editable-voice-transcript-heading { display: flex; align-items: center; gap: 8px; color: #73737a; font-size: 12px; line-height: 1; }
+.transcript-listening-mark { color: #8b99ad; letter-spacing: 1px; font-size: 14px; }
+.editable-voice-transcript-display { display: flex; align-items: flex-start; gap: 10px; margin-top: 10px; }
+.editable-voice-transcript-display p { flex: 1; margin: 0; color: #24242a; font-size: 15px; line-height: 1.38; white-space: pre-wrap; }
+.editable-voice-transcript-display button, .editable-voice-transcript-actions button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 50%; color: #4f5866; background: transparent; cursor: pointer; }
+.editable-voice-transcript-display button:hover, .editable-voice-transcript-actions button:hover { background: #f2f3f5; }
+.editable-voice-transcript-editor { margin-top: 9px; }
+.editable-voice-transcript-editor textarea { display: block; width: 100%; min-height: 70px; padding: 10px 11px; border: 1px solid #cfd3db; border-radius: 12px; color: #24242a; background: #fff; font: inherit; font-size: 15px; line-height: 1.38; resize: vertical; }
+.editable-voice-transcript-editor textarea:focus { outline: 2px solid rgb(104 119 143 / .24); outline-offset: 1px; }
+.editable-voice-transcript-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 5px; }
+.editable-voice-transcript-actions button:first-child { color: #17181b; background: #f0f1f3; }
+.editable-voice-transcript-error { margin: 2px 0 0; color: #b42318; font-size: 12px; }
+.transcript-waveform { display: flex; align-items: center; gap: 3px; height: 28px; margin-top: 7px; overflow: hidden; opacity: .68; }
+.transcript-waveform i { display: block; flex: 1 1 0; min-width: 2px; max-width: 4px; border-radius: 99px; background: #7788a1; }
 .single-outfit-stage { flex: 1; min-height: 205px; position: relative; margin: 0 -8px; display: grid; place-items: center; }
 .single-outfit-stage .outfit-canvas { height: min(100%, 360px); }
 .single-outfit-stage .outfit-piece[data-slot="outerwear"] { left: 2%; top: 8%; }
