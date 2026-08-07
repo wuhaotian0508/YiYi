@@ -1,10 +1,11 @@
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const provider = vi.hoisted(() => ({ parse: vi.fn(), clientSecret: vi.fn() }));
+const provider = vi.hoisted(() => ({ parse: vi.fn(), clientSecret: vi.fn(), clientOptions: vi.fn() }));
 vi.mock("openai", async (importOriginal) => ({
   ...await importOriginal<typeof import("openai")>(),
   default: class OpenAIMock {
+    constructor(options: unknown) { provider.clientOptions(options); }
     responses = { parse: provider.parse };
     realtime = { clientSecrets: { create: provider.clientSecret } };
   },
@@ -33,6 +34,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   provider.parse.mockReset();
   provider.clientSecret.mockReset();
+  provider.clientOptions.mockReset();
 });
 
 describe("paid provider fault boundaries", () => {
@@ -55,6 +57,19 @@ describe("paid provider fault boundaries", () => {
         }),
       }),
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+  it("keeps official Realtime calls off the CRS text endpoint", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "live");
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.stubEnv("OPENAI_BASE_URL", "https://crs.codeccs.com/openai");
+    provider.clientSecret.mockResolvedValue({ value: "ek_test-only", expires_at: 1_800_000_000 });
+
+    const response = await createRealtimeToken(new Request("http://localhost/api/realtime/token", { method: "POST", headers: { "x-forwarded-for": crypto.randomUUID() } }));
+
+    expect(response.status).toBe(200);
+    expect(provider.clientOptions).toHaveBeenCalledWith(expect.objectContaining({ baseURL: "https://api.openai.com/v1" }));
   });
 
   it("maps a Realtime provider failure to one structured 502 without exposing provider text", async () => {
