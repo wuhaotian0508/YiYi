@@ -21,6 +21,11 @@ const ResponseDeltaSchema = z.object({
   delta: z.string(),
 }).passthrough();
 
+const ResponseTextDoneSchema = z.object({
+  type: z.literal("response.output_text.done").optional(),
+  text: z.string(),
+}).passthrough();
+
 export type ProviderTextUsage = {
   inputTokens: number | undefined;
   outputTokens: number | undefined;
@@ -72,6 +77,11 @@ export async function readCrsResponseText(response: Response): Promise<ProviderT
     const delta = ResponseDeltaSchema.safeParse(event);
     if (delta.success) {
       text += delta.data.delta;
+      return;
+    }
+    const textDone = ResponseTextDoneSchema.safeParse(event);
+    if (textDone.success) {
+      text += textDone.data.text;
       return;
     }
     const completed = ResponseCompletedSchema.safeParse(event);
