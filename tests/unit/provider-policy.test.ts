@@ -8,8 +8,8 @@ describe("provider cost and timeout policy", () => {
     expect(() => zodTextFormat(WardrobeAnalysisProviderSchema, "wardrobe_analysis")).not.toThrow();
   });
 
-  it("disables hidden SDK retries and keeps every paid stage bounded", () => {
-    expect(openAIClientOptions("test-key")).toEqual({ apiKey: "test-key", maxRetries: 0 });
+  it("pins SDK-backed calls to OpenAI, disables hidden retries, and keeps every paid stage bounded", () => {
+    expect(openAIClientOptions("test-key")).toEqual({ apiKey: "test-key", baseURL: "https://api.openai.com/v1", maxRetries: 0 });
     expect(providerTimeoutMs).toEqual({ realtimeToken: 10_000, itemAnalysis: 20_000, outfitRanking: 20_000 });
     expect(Object.values(providerTimeoutMs).every((value) => value > 0 && value <= 20_000)).toBe(true);
   });

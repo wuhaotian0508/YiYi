@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import gsap from "gsap";
 import { MotionConfig } from "motion/react";
-import { TodayPage } from "@/app/today/page";
+import TodayPage from "@/app/today/page";
 import {
   ConversationalOnboarding,
   onboardingStoryLabels,

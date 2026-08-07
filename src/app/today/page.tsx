@@ -7,7 +7,7 @@ import { AnimatePresence, LayoutGroup, motion, useIsPresent, useReducedMotionCon
 import { Swiper, SwiperSlide } from "swiper/react";
 import type { Swiper as SwiperInstance } from "swiper";
 import { Check, Settings, Shirt, Shuffle, Undo2 } from "lucide-react";
-import { WardrobePanel } from "@/app/wardrobe/page";
+import { WardrobePanel } from "@/components/wardrobe/wardrobe-panel";
 import { OutfitCanvas } from "@/components/outfit/outfit-canvas";
 import { PrimaryButton, SecondaryButton } from "@/components/ui/buttons";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
@@ -91,7 +91,7 @@ function voiceStatus(phase: Phase, voice: VoiceSessionSnapshot, action: VoiceTur
   return voice.status === "listening" ? "Listening…" : "Tap to talk";
 }
 
-export function TodayPage() {
+function TodayPage() {
   const pagerRef = useRef<SwiperInstance | null>(null);
   const [activePage, setActivePage] = useState(0);
   const [phase, setPhase] = useState<Phase>("idle");

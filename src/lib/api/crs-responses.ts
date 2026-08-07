@@ -90,7 +90,9 @@ export async function readCrsResponseText(response: Response): Promise<ProviderT
     }
     const textDone = ResponseTextDoneSchema.safeParse(event);
     if (textDone.success) {
-      text += textDone.data.text;
+      // Providers may send both deltas and the complete final text. The final
+      // event is authoritative; appending it would duplicate structured JSON.
+      completedText = textDone.data.text;
       return;
     }
     const completed = ResponseCompletedSchema.safeParse(event);
@@ -109,7 +111,7 @@ export async function readCrsResponseText(response: Response): Promise<ProviderT
     if (done) break;
   }
   if (pending.trim()) consume(pending);
-  const result = text || completedText || "";
+  const result = completedText || text || "";
   if (!result.trim()) throw new Error("Language provider returned no text");
   return { text: result, model, usage };
 }

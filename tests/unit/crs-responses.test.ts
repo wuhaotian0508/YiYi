@@ -42,6 +42,19 @@ describe("CRS Responses stream parsing", () => {
     });
   });
 
+  it("uses the final output_text.done text instead of duplicating streamed deltas", async () => {
+    const response = new Response([
+      "event: response.output_text.delta\n",
+      "data: {\"type\":\"response.output_text.delta\",\"delta\":\"{\\\"activities\\\":[\"}\n\n",
+      "event: response.output_text.done\n",
+      "data: {\"type\":\"response.output_text.done\",\"text\":\"{\\\"activities\\\":[\\\"school\\\"]}\"}\n\n",
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+
+    await expect(readCrsResponseText(response)).resolves.toMatchObject({
+      text: '{"activities":["school"]}',
+    });
+  });
+
   it("reads final message text from the standard Responses output array", async () => {
     const response = new Response([
       "event: response.completed\n",
