@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { VoiceConnectionFailure, type TranscriptState, type VoiceSessionAdapter, type VoiceState } from "@/lib/realtime/voice-session";
+import { classifyRealtimeSessionFailure, VoiceConnectionFailure, type TranscriptState, type VoiceSessionAdapter, type VoiceState } from "@/lib/realtime/voice-session";
 import { VoiceSessionCoordinator } from "@/lib/realtime/voice-session-coordinator";
 
 function deferred<T>() {
@@ -42,6 +42,19 @@ class FakeVoiceAdapter implements VoiceSessionAdapter {
 }
 
 describe("VoiceSessionCoordinator", () => {
+  it("preserves safe nested Realtime provider errors while a session is becoming ready", () => {
+    const failure = classifyRealtimeSessionFailure({
+      type: "error",
+      error: {
+        type: "error",
+        error: { type: "invalid_request_error", code: "invalid_value", message: "session-specific details stay private" },
+      },
+    }, false, "connecting");
+
+    expect(failure).toMatchObject({ stage: "ready", code: "invalid_value", errorType: "invalid_request_error" });
+    expect(failure.message).not.toContain("session-specific details");
+  });
+
   it("routes central commit and interrupt actions only in their valid states", async () => {
     const adapter = new FakeVoiceAdapter();
     const coordinator = new VoiceSessionCoordinator();

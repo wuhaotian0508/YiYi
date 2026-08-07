@@ -65,7 +65,10 @@ function voiceStatus(phase: Phase, voice: VoiceSessionSnapshot, action: VoiceTur
   if (voice.status === "recoverable_error" || phase === "error") {
     if (voice.stage === "permission") return "Microphone access is needed · Tap to retry";
     if (voice.stage === "token") return "Voice access is unavailable · Tap to retry";
-    if (voice.stage === "webrtc" || voice.stage === "ready") return "Voice connection failed · Tap to retry";
+    if (voice.stage === "webrtc") return "Voice connection failed · Tap to retry";
+    if (voice.stage === "ready") return voice.errorCode && voice.errorCode !== "SESSION_READY_FAILED"
+      ? `Voice setup error: ${voice.errorCode} · Tap to retry`
+      : "Voice connection failed · Tap to retry";
     const diagnostic = [voice.stage, voice.errorCode, voice.diagnosticId ? `ID ${voice.diagnosticId}` : null].filter(Boolean).join(" · ");
     return diagnostic ? `Voice stopped · ${diagnostic} · Tap to retry` : "Voice stopped · Tap to retry";
   }

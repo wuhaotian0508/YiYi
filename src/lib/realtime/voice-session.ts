@@ -121,8 +121,17 @@ function parseVoiceToolResult(result: string) {
 }
 
 export function classifyRealtimeSessionFailure(event: unknown, connected: boolean, currentState: VoiceState) {
-  const rawError = event && typeof event === "object" && "error" in event ? (event as { error: unknown }).error : event;
-  const errorType = rawError instanceof Error ? rawError.name : typeof rawError;
+  // RealtimeSession wraps provider events once more before emitting them. Keep
+  // only the provider's stable code/type, never its message (which can contain
+  // request-specific content), so the UI and diagnostics can identify a
+  // rejected session configuration without exposing conversation data.
+  const outerError = event && typeof event === "object" && "error" in event ? (event as { error: unknown }).error : event;
+  const nestedError = objectRecord(outerError)?.error;
+  const rawError = nestedError ?? outerError;
+  const providerError = objectRecord(rawError);
+  const providerCode = safeRealtimeProviderValue(providerError?.code);
+  const providerType = safeRealtimeProviderValue(providerError?.type);
+  const errorType = providerType ?? (rawError instanceof Error ? rawError.name : typeof rawError);
   if (rawError instanceof z.ZodError) {
     return new VoiceConnectionFailure({
       stage: "tool",
@@ -134,9 +143,15 @@ export function classifyRealtimeSessionFailure(event: unknown, connected: boolea
   if (rawError instanceof SyntaxError) {
     return new VoiceConnectionFailure({ stage: "tool", code: "TOOL_ARGUMENTS_INVALID", errorType });
   }
-  if (!connected) return new VoiceConnectionFailure({ stage: "ready", code: "SESSION_READY_FAILED", errorType });
+  if (!connected) return new VoiceConnectionFailure({ stage: "ready", code: providerCode ?? "SESSION_READY_FAILED", errorType });
   if (currentState === "speaking") return new VoiceConnectionFailure({ stage: "audio", code: "AUDIO_OUTPUT_FAILED", errorType });
   return new VoiceConnectionFailure({ stage: "tool", code: "REALTIME_TOOL_FAILED", errorType });
+}
+
+function safeRealtimeProviderValue(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return /^[a-z0-9_]{1,80}$/i.test(trimmed) ? trimmed : undefined;
 }
 
 function retryAfterMilliseconds(response: Response) {
@@ -348,6 +363,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
       } catch (error) { throw new VoiceConnectionFailure({ stage: "session", code: "SESSION_CONSTRUCTION_FAILED", errorType: error instanceof Error ? error.name : "UnknownError" }); }
       this.session = session;
       const isActive = () => this.session === session && generation === this.connectGeneration;
+      let realtimeSessionFailure: VoiceConnectionFailure | null = null;
       let sessionUpdateObserved = false;
       let resolveSessionUpdate: (() => void) | null = null;
       const sessionUpdateAcknowledged = new Promise<void>((resolve) => { resolveSessionUpdate = resolve; });
@@ -447,6 +463,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
       session.on("error", (event) => {
         if (!isActive()) return;
         const failure = classifyRealtimeSessionFailure(event, this.connected, this.currentState);
+        realtimeSessionFailure = failure;
         this.record(failure.stage, "error", { errorCode: failure.code, errorType: failure.errorType, zodIssuePaths: failure.zodIssuePaths });
         this.emitFailure(failure);
         this.turnController.fail();
@@ -614,8 +631,9 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
         if (error instanceof DOMException && ["NotAllowedError", "NotFoundError", "SecurityError"].includes(error.name)) {
           throw new VoiceConnectionFailure({ stage: "permission", code: "MICROPHONE_UNAVAILABLE" });
         }
+        if (realtimeSessionFailure) throw realtimeSessionFailure;
         const awaitingReady = error instanceof Error && /session config|acknowledged/i.test(error.message);
-        throw new VoiceConnectionFailure({ stage: awaitingReady ? "ready" : "webrtc", code: awaitingReady ? "SESSION_READY_FAILED" : "WEBRTC_CONNECT_FAILED" });
+        throw new VoiceConnectionFailure({ stage: awaitingReady ? "ready" : "webrtc", code: awaitingReady ? "SESSION_READY_FAILED" : "WEBRTC_CONNECT_FAILED", errorType: error instanceof Error ? error.name : typeof error });
       }
       if (!isActive()) { session.close(); return; }
       if (!sessionUpdateObserved) {
