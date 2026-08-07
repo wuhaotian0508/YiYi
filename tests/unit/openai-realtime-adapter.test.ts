@@ -216,7 +216,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(states.filter((state) => state === "error")).toHaveLength(0);
   });
 
-  it("uses conservative automatic interruption and switches agents only after successful initial mutation", async () => {
+  it("keeps initial setup provider-default, then requires tools for committed Today turns", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
     await adapter.connect();
@@ -224,10 +224,10 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
 
     expect(session.options).toMatchObject({
       config: {
-        toolChoice: "required",
         audio: { input: { transcription: { model: "gpt-4o-mini-transcribe" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
       },
     });
+    expect((session.options as { config: Record<string, unknown> }).config).not.toHaveProperty("toolChoice");
     expect((session.agent as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
       "request_outfit_recommendation",
     ]);

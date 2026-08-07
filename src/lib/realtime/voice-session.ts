@@ -357,7 +357,6 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
                 turnDetection: yiyiTurnDetection,
               },
             },
-            ...(this.options.purpose === "today" ? { toolChoice: "required" as const } : {}),
           },
         });
       } catch (error) { throw new VoiceConnectionFailure({ stage: "session", code: "SESSION_CONSTRUCTION_FAILED", errorType: error instanceof Error ? error.name : "UnknownError" }); }
@@ -484,9 +483,12 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           const turnDetection = objectRecord(input?.turn_detection);
           const expectedTool = this.options.purpose === "fine-tune" ? "save_explicit_preference" : INITIAL_RECOMMENDATION_TOOL;
           const responseOwnedByApplication = turnDetection?.create_response === false && turnDetection?.interrupt_response === false;
-          const requiredToolChoiceReady = this.options.purpose !== "today" || sessionPayload?.tool_choice === "required";
           const transcriptionReady = transcription?.model === "gpt-4o-mini-transcribe";
-          const effectiveReady = responseOwnedByApplication && requiredToolChoiceReady && transcriptionReady && toolNames.includes(expectedTool);
+          // `response.create` below owns the Today turn and explicitly requires
+          // an application tool. Keeping the initial session in the provider's
+          // default tool-choice mode avoids rejecting an otherwise valid WebRTC
+          // session before the first committed user turn.
+          const effectiveReady = responseOwnedByApplication && transcriptionReady && toolNames.includes(expectedTool);
           if (!this.connected) this.effectiveSessionReady = effectiveReady;
           this.record("ready", effectiveReady ? "success" : "error", {
             realtimeEvent: event.type,
