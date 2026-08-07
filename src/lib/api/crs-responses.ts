@@ -4,6 +4,9 @@ const ResponseCompletedSchema = z.object({
   type: z.literal("response.completed").optional(),
   response: z.object({
     output_text: z.string().optional(),
+    output: z.array(z.object({
+      content: z.array(z.object({ text: z.string().optional() }).passthrough()).optional(),
+    }).passthrough()).optional(),
     model: z.string().optional(),
     usage: z.object({
       input_tokens: z.number().int().nonnegative().optional(),
@@ -39,6 +42,13 @@ function usageFrom(value: { input_tokens?: number; output_tokens?: number; total
   };
 }
 
+function outputTextFrom(response: z.infer<typeof ResponseCompletedSchema>["response"]) {
+  return response?.output
+    ?.flatMap((item) => item.content ?? [])
+    .map((part) => part.text ?? "")
+    .join("");
+}
+
 /**
  * CRS requires Responses requests to stream. This consumes only text and
  * usage/model metadata; callers never receive or log provider event bodies.
@@ -66,7 +76,7 @@ export async function readCrsResponseText(response: Response): Promise<ProviderT
     }
     const completed = ResponseCompletedSchema.safeParse(event);
     if (!completed.success || !completed.data.response) return;
-    completedText = completed.data.response.output_text;
+    completedText = completed.data.response.output_text ?? outputTextFrom(completed.data.response);
     model = completed.data.response.model;
     usage = usageFrom(completed.data.response.usage);
   };

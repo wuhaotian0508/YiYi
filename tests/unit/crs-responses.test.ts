@@ -30,4 +30,15 @@ describe("CRS Responses stream parsing", () => {
       model: "gpt-5.5",
     });
   });
+
+  it("reads final message text from the standard Responses output array", async () => {
+    const response = new Response([
+      "event: response.completed\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"activityPhrases\\\":[\\\"school\\\"]}\"}]}]}}\n\n",
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+
+    await expect(readCrsResponseText(response)).resolves.toMatchObject({
+      text: '{"activityPhrases":["school"]}',
+    });
+  });
 });
