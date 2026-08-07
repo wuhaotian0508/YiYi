@@ -124,21 +124,31 @@ export async function requestCrsResponseText(input: {
   stream?: boolean;
 }) {
   const url = input.baseUrl.replace(/\/+$/, "") + "/responses";
+  const stream = input.stream ?? true;
+  const body = stream
+    ? {
+      model: input.model,
+      stream,
+      store: false,
+      input: [
+        { role: "system", content: [{ type: "input_text", text: input.instructions }] },
+        { role: "user", content: [{ type: "input_text", text: input.text }] },
+      ],
+    }
+    : {
+      model: input.model,
+      stream,
+      store: false,
+      instructions: input.instructions,
+      input: input.text,
+    };
   const response = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: "Bearer " + input.apiKey,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: input.model,
-      stream: input.stream ?? true,
-      store: false,
-      input: [
-        { role: "system", content: [{ type: "input_text", text: input.instructions }] },
-        { role: "user", content: [{ type: "input_text", text: input.text }] },
-      ],
-    }),
+    body: JSON.stringify(body),
     signal: input.signal,
   });
   return readCrsResponseText(response);
