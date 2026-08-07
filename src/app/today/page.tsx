@@ -243,11 +243,12 @@ export function TodayPage() {
   useEffect(() => {
     const nextTranscript = voiceSnapshot.latestUserTranscript;
     if (voiceSnapshot.owner !== "today" || !nextTranscript) return;
-    if (nextTranscript.role !== "user" || !nextTranscript.final || process.env.NEXT_PUBLIC_VOICE_MODE === "live") return;
+    if (nextTranscript.role !== "user" || !nextTranscript.final) return;
+    queueMicrotask(() => setResultTranscript(nextTranscript.text));
+    if (process.env.NEXT_PUBLIC_VOICE_MODE === "live") return;
     const key = `${voiceSnapshot.generation}:${nextTranscript.text}`;
     if (handledTranscriptRef.current === key) return;
     handledTranscriptRef.current = key;
-    setResultTranscript(nextTranscript.text);
     void (async () => {
       const request = await interpretBrowserVoiceTranscript(nextTranscript.text).catch(() => ({
         userRequest: nextTranscript.text,

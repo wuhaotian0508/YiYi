@@ -4,7 +4,7 @@ const sdk = vi.hoisted(() => {
   const defaultEffectiveSession = () => ({
     tool_choice: "required",
     tools: [{ type: "function", name: "request_outfit_recommendation" }],
-    audio: { input: { transcription: { model: "gpt-4o-mini-transcribe", language: "en" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
+    audio: { input: { transcription: { model: "gpt-4o-mini-transcribe" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
   });
   const sessions: Array<{
     listeners: Map<string, Set<(...args: unknown[]) => void>>;
@@ -225,7 +225,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(session.options).toMatchObject({
       config: {
         toolChoice: "required",
-        audio: { input: { transcription: { model: "gpt-4o-mini-transcribe", language: "en" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
+        audio: { input: { transcription: { model: "gpt-4o-mini-transcribe" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
       },
     });
     expect((session.agent as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name)).toEqual([
@@ -284,6 +284,18 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     session.emit("transport_event", { type: "conversation.item.input_audio_transcription.completed", event_id: "evt-complete", item_id: "user-1", content_index: 0, transcript: "Hiking and dinner." });
     expect(transcripts).toContainEqual({ role: "user", text: "Hiking and dinner.", final: true });
     expect(session.requestResponse).toHaveBeenCalledOnce();
+  });
+
+  it("publishes incremental transcription text while the user is speaking", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+    const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
+    adapter.onTranscript((transcript) => transcripts.push(transcript));
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.delta", item_id: "user-1", delta: "Hiking " });
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.delta", item_id: "user-1", delta: "and dinner." });
+    expect(transcripts.at(-1)).toEqual({ role: "user", text: "Hiking and dinner.", final: false });
   });
 
   it("refuses to listen when the acknowledged server session still owns response creation", async () => {
