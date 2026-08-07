@@ -7,11 +7,12 @@ type EditableVoiceTranscriptProps = {
   text: string;
   onCommit: (text: string) => void;
   onCancel: () => void;
+  label?: string;
 };
 
 const waveform = [8, 14, 11, 22, 16, 28, 18, 24, 13, 20, 10, 17, 8, 14, 10, 19, 12, 22, 15, 26, 11, 18, 8, 13, 7];
 
-export function EditableVoiceTranscript({ text, onCommit, onCancel }: EditableVoiceTranscriptProps) {
+export function EditableVoiceTranscript({ text, onCommit, onCancel, label = "Listening…" }: EditableVoiceTranscriptProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
   const [error, setError] = useState("");
@@ -40,7 +41,7 @@ export function EditableVoiceTranscript({ text, onCommit, onCancel }: EditableVo
   }
 
   return <section className="editable-voice-transcript" aria-label="Voice transcript">
-    <div className="editable-voice-transcript-heading"><span className="transcript-listening-mark" aria-hidden="true">•••</span><span>Listening…</span></div>
+    <div className="editable-voice-transcript-heading"><span className="transcript-listening-mark" aria-hidden="true">•••</span><span>{label}</span></div>
     {editing ? <div className="editable-voice-transcript-editor">
       <textarea aria-label="Voice transcript" value={draft} onChange={(event) => { setDraft(event.target.value); setError(""); }} rows={3} autoFocus />
       <div className="editable-voice-transcript-actions">
