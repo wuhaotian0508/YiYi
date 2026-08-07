@@ -3,6 +3,14 @@ export type RateLimitMode = "upstash" | "per-instance";
 
 const counters = new Map<string, Counter>();
 
+/** Vercel's Upstash integration exposes KV_REST_*; self-managed Redis uses UPSTASH_*. */
+function redisRestConfig() {
+  return {
+    url: process.env.UPSTASH_REDIS_REST_URL ?? process.env.KV_REST_API_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN ?? process.env.KV_REST_API_TOKEN,
+  };
+}
+
 function hashSource(source: string) {
   let hash = 2166136261;
   for (const character of source) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619); }
@@ -21,7 +29,8 @@ function requestFingerprints(request: Request) {
 }
 
 export function rateLimitMode(): RateLimitMode {
-  if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) return "upstash";
+  const { url, token } = redisRestConfig();
+  if (url && token) return "upstash";
   return "per-instance";
 }
 
@@ -35,8 +44,8 @@ export function providerRoutesAllowed() {
 }
 
 async function distributedConsume(key: string, limit: number, windowMs: number) {
-  const url = process.env.UPSTASH_REDIS_REST_URL!;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN!;
+  const { url, token } = redisRestConfig();
+  if (!url || !token) throw new Error("Distributed rate limiter is not configured");
   const response = await fetch(`${url}/pipeline`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
