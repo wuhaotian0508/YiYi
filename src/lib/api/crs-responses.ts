@@ -60,6 +60,13 @@ function outputTextFrom(response: z.infer<typeof ResponseCompletedSchema>["respo
  */
 export async function readCrsResponseText(response: Response): Promise<ProviderTextResponse> {
   if (!response.ok) throw Object.assign(new Error("Language provider failed"), { status: response.status });
+  if (response.headers.get("content-type")?.includes("application/json")) {
+    const payload: unknown = await response.json();
+    const completed = ResponseCompletedSchema.safeParse({ response: payload });
+    const text = completed.success ? completed.data.response?.output_text ?? outputTextFrom(completed.data.response) : "";
+    if (!text?.trim()) throw new Error("Language provider returned no text");
+    return { text, model: completed.data.response?.model, usage: usageFrom(completed.data.response?.usage) };
+  }
   if (!response.body) throw new Error("Language provider returned no response body");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -112,6 +119,7 @@ export async function requestCrsResponseText(input: {
   instructions: string;
   text: string;
   signal: AbortSignal;
+  stream?: boolean;
 }) {
   const url = input.baseUrl.replace(/\/+$/, "") + "/responses";
   const response = await fetch(url, {
@@ -122,7 +130,7 @@ export async function requestCrsResponseText(input: {
     },
     body: JSON.stringify({
       model: input.model,
-      stream: true,
+      stream: input.stream ?? true,
       store: false,
       input: [
         { role: "system", content: [{ type: "input_text", text: input.instructions }] },

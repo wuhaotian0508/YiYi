@@ -52,4 +52,16 @@ describe("CRS Responses stream parsing", () => {
       text: '{"activityPhrases":["school"]}',
     });
   });
+
+  it("reads a standard non-streaming Responses payload", async () => {
+    const response = new Response(JSON.stringify({
+      model: "gpt-5.6-luna",
+      output: [{ type: "message", content: [{ type: "output_text", text: '{"desiredFeelings":["comfortable"]}' }] }],
+    }), { headers: { "content-type": "application/json" } });
+
+    await expect(readCrsResponseText(response)).resolves.toMatchObject({
+      text: '{"desiredFeelings":["comfortable"]}',
+      model: "gpt-5.6-luna",
+    });
+  });
 });

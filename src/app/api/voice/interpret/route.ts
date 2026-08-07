@@ -56,6 +56,7 @@ export async function POST(request: Request) {
       instructions,
       text: parsed.data.transcript,
       signal: AbortSignal.timeout(15_000),
+      stream: !languageUsesOpenAI,
     });
     const interpretation = VoiceInterpretationSchema.safeParse(parseJsonObject(response.text));
     if (!interpretation.success) {
