@@ -63,9 +63,11 @@ export async function readCrsResponseText(response: Response): Promise<ProviderT
   if (response.headers.get("content-type")?.includes("application/json")) {
     const payload: unknown = await response.json();
     const completed = ResponseCompletedSchema.safeParse({ response: payload });
-    const text = completed.success ? completed.data.response?.output_text ?? outputTextFrom(completed.data.response) : "";
+    if (!completed.success) throw new Error("Language provider returned invalid JSON");
+    const completedResponse = completed.data.response;
+    const text = completedResponse?.output_text ?? outputTextFrom(completedResponse);
     if (!text?.trim()) throw new Error("Language provider returned no text");
-    return { text, model: completed.data.response?.model, usage: usageFrom(completed.data.response?.usage) };
+    return { text, model: completedResponse?.model, usage: usageFrom(completedResponse?.usage) };
   }
   if (!response.body) throw new Error("Language provider returned no response body");
   const reader = response.body.getReader();
