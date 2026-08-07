@@ -9,7 +9,7 @@ export function GET() {
     requestId: crypto.randomUUID(),
     openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
     languageConfigured: Boolean(process.env.CRS_API_KEY ?? process.env.OPENAI_API_KEY),
-    languageBaseConfigured: Boolean(process.env.OPENAI_BASE_URL),
+    languageBaseConfigured: Boolean(process.env.OPENAI_LANGUAGE_BASE_URL ?? process.env.OPENAI_BASE_URL),
     photoroomConfigured: Boolean(process.env.PHOTOROOM_API_KEY),
     aiMode: process.env.AI_MODE === "live" ? "live" : "mock",
     voiceMode: process.env.NEXT_PUBLIC_VOICE_MODE === "browser" ? "browser" : process.env.NEXT_PUBLIC_VOICE_MODE === "live" ? "live" : "mock",
