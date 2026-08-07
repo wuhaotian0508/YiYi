@@ -42,12 +42,14 @@ export async function POST(request: Request) {
     const parsed = VoiceInterpretRequestSchema.safeParse(body);
     if (!parsed.success) return apiError(requestId, 400, "INVALID_VOICE_INTERPRET_REQUEST", "The voice transcript was invalid.");
     requestId = parsed.data.requestId;
-    if (process.env.AI_MODE !== "live" || !process.env.OPENAI_API_KEY || !process.env.OPENAI_BASE_URL) {
+    // Realtime and vision use OpenAI directly; CRS can use its own compatible key.
+    const languageApiKey = process.env.CRS_API_KEY ?? process.env.OPENAI_API_KEY;
+    if (process.env.AI_MODE !== "live" || !languageApiKey || !process.env.OPENAI_BASE_URL) {
       return apiError(requestId, 503, "NOT_CONFIGURED", "Live language understanding is not configured.", true);
     }
     const response = await requestCrsResponseText({
       baseUrl: process.env.OPENAI_BASE_URL,
-      apiKey: process.env.OPENAI_API_KEY,
+      apiKey: languageApiKey,
       model: process.env.OPENAI_LANGUAGE_MODEL ?? process.env.OPENAI_RANK_MODEL ?? "gpt-5.5",
       instructions,
       text: parsed.data.transcript,
