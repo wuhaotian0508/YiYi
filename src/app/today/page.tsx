@@ -245,9 +245,9 @@ function TodayPage() {
 
   useEffect(() => {
     const nextTranscript = voiceSnapshot.latestUserTranscript;
-    if (voiceSnapshot.owner !== "today" || !nextTranscript) return;
-    if (nextTranscript.role !== "user" || !nextTranscript.final) return;
+    if (voiceSnapshot.owner !== "today" || !nextTranscript || nextTranscript.role !== "user") return;
     queueMicrotask(() => setResultTranscript(nextTranscript.text));
+    if (!nextTranscript.final) return;
     if (process.env.NEXT_PUBLIC_VOICE_MODE === "live") return;
     const key = `${voiceSnapshot.generation}:${nextTranscript.text}`;
     if (handledTranscriptRef.current === key) return;
