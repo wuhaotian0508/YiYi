@@ -330,6 +330,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
         },
         handleTurn: (input) => {
           this.emitToolRequestTranscript(input.userRequest);
+          this.record("tool", "started", { toolName: "handle_outfit_turn", voiceAction: input.action });
           followupInvocation ??= this.handlers.handleTurn(input);
           return followupInvocation;
         },

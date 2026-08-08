@@ -138,4 +138,40 @@ describe("voice recommendation situation semantics", () => {
     expect(delta.targetSlots).toEqual(["extraAccessory"]);
     expect(delta.emptySlots).toEqual(["extraAccessory"]);
   });
+
+  it.each([
+    ["换一双鞋", "shoes"],
+    ["裤子换一条", "bottom"],
+    ["把外套换掉", "outerwear"],
+    ["换个包", "bag"],
+    ["上衣换一件", "top"],
+    ["换条连衣裙", "onePiece"],
+  ] as const)("targets the spoken slot when the request is restated in Chinese: %s", (request, slot) => {
+    const current = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile, weather: null, operation: "initial" }).deterministicAnswer;
+    const delta = voiceActionToIntentDelta({
+      action: { action: "revise", userRequest: request, targetSlot: null, targetDescription: null, availability: null },
+      currentOutfit: current,
+      wardrobe: demoWardrobe,
+      focusedSlot: null,
+    });
+
+    expect(delta.targetSlots).toEqual([slot]);
+    expect(delta.operation).toBe("targeted_revision");
+  });
+
+  it("replaces the targeted item for a Chinese revision instead of returning the same outfit", () => {
+    const current = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile, weather: null, operation: "initial" }).deterministicAnswer;
+    const delta = voiceActionToIntentDelta({
+      action: { action: "revise", userRequest: "换一双鞋", targetSlot: null, targetDescription: null, availability: null },
+      currentOutfit: current,
+      wardrobe: demoWardrobe,
+      focusedSlot: null,
+    });
+    const revised = runRecommendationDecision({ wardrobe: demoWardrobe, intent: demoIntent, profile, weather: null, operation: "targeted_revision", currentOutfit: current, delta }).deterministicAnswer;
+
+    expect(revised.itemIds.shoes).not.toBe(current.itemIds.shoes);
+    expect(revised.itemIds.top).toBe(current.itemIds.top);
+    expect(revised.itemIds.bottom).toBe(current.itemIds.bottom);
+  });
+
 });

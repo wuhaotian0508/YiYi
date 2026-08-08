@@ -25,6 +25,9 @@ export type VoiceDiagnostic = {
   turnCommittedAt?: number;
   outfitVersionId?: string;
   realtimeEvent?: string;
+  // The routed turn action is a closed enum, never user content, and is the only
+  // way to tell a real revision apart from a no_change turn in production.
+  voiceAction?: string;
   responseId?: string;
   responseStatus?: string;
   outputItemType?: string;

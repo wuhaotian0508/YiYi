@@ -3,9 +3,29 @@ import type { VoiceTurnAction } from "@/lib/realtime/voice-session";
 
 const zeroAdjustments = { formality: 0, warmth: 0, comfort: 0, colorfulness: 0, walkingPriority: 0, layering: 0, structure: 0 };
 
+// Spoken slot words the Realtime model may restate in the user's own language.
+// Chinese has no word boundaries, so these are ordered most-specific-first:
+// 连衣裙 contains 裙, 包包 contains 包, and 运动鞋 contains 鞋.
+const chineseSlotTerms: Array<[OutfitSlot, string[]]> = [
+  ["onePiece", ["连衣裙", "连身裙", "连体裤", "连衣"]],
+  ["extraAccessory", ["墨镜", "太阳镜", "眼镜", "帽子", "围巾", "腰带", "发饰", "配饰"]],
+  ["jewelry", ["项链", "耳环", "耳钉", "手链", "手镯", "戒指", "首饰"]],
+  ["bag", ["手提包", "单肩包", "斜挎包", "双肩包", "托特包", "背包", "包包", "手袋", "包"]],
+  ["shoes", ["运动鞋", "球鞋", "靴子", "高跟鞋", "乐福鞋", "皮鞋", "鞋子", "鞋"]],
+  ["outerwear", ["西装外套", "风衣", "大衣", "夹克", "外套"]],
+  ["bottom", ["牛仔裤", "短裤", "长裤", "裤子", "半身裙", "裙子", "下装", "裤", "裙"]],
+  ["top", ["针织衫", "卫衣", "毛衣", "衬衫", "上衣", "上装", "t恤"]],
+];
+
+function chineseSlotIn(text: string) {
+  return chineseSlotTerms.find(([, terms]) => terms.some((term) => text.includes(term)))?.[0] ?? null;
+}
+
 export function inferVoiceTargetSlot(request: string, explicit: OutfitSlot | null, focused: OutfitSlot | null): OutfitSlot | null {
   if (explicit) return explicit;
   const text = request.toLowerCase();
+  const chinese = chineseSlotIn(text);
+  if (chinese) return chinese;
   if (/sunglasses|glasses|eyewear|hat|cap|scarf|belt|accessory/.test(text)) return "extraAccessory";
   if (/jewelry|jewellery|necklace|earrings?|hoops?|bracelet|rings?/.test(text)) return "jewelry";
   if (/bag|tote|purse|crossbody/.test(text)) return "bag";
@@ -39,13 +59,13 @@ function explicitlyPreservedSlots(request: string) {
 function adjustmentFor(request: string) {
   const text = request.toLowerCase();
   return {
-    formality: /more formal|dressier|polished/.test(text) ? 0.6 : /less formal|casual|relaxed/.test(text) ? -0.6 : 0,
-    warmth: /warmer|cold/.test(text) ? 0.7 : /cooler|too warm|hot/.test(text) ? -0.7 : 0,
-    comfort: /comfortable|comfort|relaxed|walking|hiking|running|gym|basketball/.test(text) ? 0.7 : 0,
-    colorfulness: /more colou?r|brighter/.test(text) ? 0.6 : /less colou?r|neutral/.test(text) ? -0.6 : 0,
-    walkingPriority: /walking|hiking|running|gym|basketball/.test(text) ? 1 : 0,
-    layering: /layer|jacket|coat/.test(text) ? 0.4 : 0,
-    structure: /structured|tailored/.test(text) ? 0.5 : /soft|relaxed/.test(text) ? -0.4 : 0,
+    formality: /more formal|dressier|polished|正式|优雅|精致/.test(text) ? 0.6 : /less formal|casual|relaxed|休闲|随意/.test(text) ? -0.6 : 0,
+    warmth: /warmer|cold|暖|保暖|冷/.test(text) ? 0.7 : /cooler|too warm|hot|凉快|太热/.test(text) ? -0.7 : 0,
+    comfort: /comfortable|comfort|relaxed|walking|hiking|running|gym|basketball|舒服|舒适|走路|散步|运动|健身/.test(text) ? 0.7 : 0,
+    colorfulness: /more colou?r|brighter|鲜艳|亮一点|多点颜色/.test(text) ? 0.6 : /less colou?r|neutral|素一点|低调|中性色/.test(text) ? -0.6 : 0,
+    walkingPriority: /walking|hiking|running|gym|basketball|走路|散步|徒步|运动|健身/.test(text) ? 1 : 0,
+    layering: /layer|jacket|coat|叠穿|外套|大衣/.test(text) ? 0.4 : 0,
+    structure: /structured|tailored|挺括|有型/.test(text) ? 0.5 : /soft|relaxed|柔软|宽松/.test(text) ? -0.4 : 0,
   };
 }
 
