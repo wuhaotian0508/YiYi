@@ -124,9 +124,16 @@ export async function requestCrsResponseText(input: {
   text: string;
   signal: AbortSignal;
   stream?: boolean;
+  /**
+   * Candidate board images for visual ranking. CRS ignores `text.format`, so
+   * structured callers describe the schema in `instructions` and validate the
+   * returned text themselves. Images are only supported on the streaming path.
+   */
+  imageDataUrls?: string[];
 }) {
   const url = input.baseUrl.replace(/\/+$/, "") + "/responses";
   const stream = input.stream ?? true;
+  const images = (input.imageDataUrls ?? []).map((imageUrl) => ({ type: "input_image", image_url: imageUrl, detail: "high" }));
   const body = stream
     ? {
       model: input.model,
@@ -134,7 +141,7 @@ export async function requestCrsResponseText(input: {
       store: false,
       input: [
         { role: "system", content: [{ type: "input_text", text: input.instructions }] },
-        { role: "user", content: [{ type: "input_text", text: input.text }] },
+        { role: "user", content: [{ type: "input_text", text: input.text }, ...images] },
       ],
     }
     : {

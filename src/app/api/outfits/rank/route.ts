@@ -7,11 +7,80 @@ import { apiError, noStoreJson } from "@/lib/api/responses";
 import { providerRoutesAllowed, takeRateLimit } from "@/lib/api/rate-limit";
 import { logApiDiagnostic, responseRequestId, responseUsage, safeErrorMetadata, type ApiDiagnostic } from "@/lib/api/diagnostics";
 import { openAIClientOptions, providerTimeoutMs } from "@/lib/api/provider-policy";
+import { requestCrsResponseText } from "@/lib/api/crs-responses";
 import { isImageRuntimeUnavailable, loadSharp } from "@/lib/images/sharp-runtime";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 const MAX_BOARD_PIXELS = 1024 * 1280;
+
+function parseJsonObject(text: string) {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end < start) throw new Error("Ranking provider returned invalid JSON");
+  return JSON.parse(text.slice(start, end + 1)) as unknown;
+}
+
+const CRS_RANK_INSTRUCTIONS = `You visually rank supplied outfit candidates for YiYi. Reply with ONLY one minified JSON object, no markdown and no prose, shaped exactly: {"selectedCandidateId":string,"mainReason":string,"candidateScores":[{"candidateId":string,"visualCoherence":number,"colorBalance":number,"silhouetteBalance":number,"materialHarmony":number,"styleClarity":number,"reason":string,"concerns":string[]}]}. Every number is between 0 and 1. Include exactly one candidateScores entry for every supplied candidate id, in the supplied order. selectedCandidateId must be one of the supplied ids. Never invent, alter, or combine candidates. Keep mainReason and each reason under 18 words, in English.`;
+
+/**
+ * A CRS-compatible endpoint is stream-only and ignores `text.format`, so the
+ * ranking schema travels in the instructions and the returned text is validated
+ * here against the same schema the OpenAI path parses. Any unusable answer falls
+ * back to the deterministic candidate exactly as an OpenAI failure does.
+ */
+async function rankThroughCrs(context: {
+  input: z.infer<typeof RankRequestSchema>;
+  requestId: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  deterministic: z.infer<typeof RankRequestSchema>["candidates"][number];
+  correlation: Partial<ApiDiagnostic>;
+  boardBytes: number;
+  boardWidth: number;
+  boardHeight: number;
+  imageMime: ApiDiagnostic["imageMime"];
+}) {
+  const { input, requestId, model, deterministic, correlation, boardBytes, boardWidth, boardHeight, imageMime } = context;
+  const startedAt = Date.now();
+  const shared = { candidateCount: input.candidates.length, boardBytes, boardWidth, boardHeight, imageMime, providerStage: "full-listwise-structured", schemaName: "outfit_ranking" } as const;
+  const deterministicAnswer = (errorCode: string, actualModel: string) => noStoreJson({
+    requestId,
+    ranking: { selectedCandidateId: deterministic.id, mainReason: "A legal, cohesive answer for today.", candidateScores: [] },
+    source: "fallback",
+    model: actualModel,
+    diagnostics: { requestId, boardBytes, candidateCount: input.candidates.length, errorCode },
+  });
+  try {
+    const crs = await requestCrsResponseText({
+      baseUrl: context.baseUrl,
+      apiKey: context.apiKey,
+      model,
+      instructions: CRS_RANK_INSTRUCTIONS,
+      text: `Images follow in the same order as the candidate list.\nUser: ${input.originalUtterance}\nIntent: ${JSON.stringify(input.intent)}\nPreferences: ${input.preferences.summary}\nWeather: ${JSON.stringify(input.weather)}\nCandidates: ${JSON.stringify(input.candidates.map(({ id, itemIds, deterministicScore }) => ({ id, itemIds, deterministicScore })))}`,
+      imageDataUrls: input.candidates.map((candidate) => candidate.boardDataUrl),
+      signal: AbortSignal.timeout(providerTimeoutMs.outfitRanking),
+    });
+    const actualModel = crs.model ?? model;
+    const parsed = OutfitRankingResultSchema.safeParse(parseJsonObject(crs.text));
+    if (!parsed.success) {
+      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "error", ...correlation, httpStatus: 200, durationMs: Date.now() - startedAt, errorCode: "INVALID_RANK_OUTPUT", errorType: "InvalidProviderOutput", usage: crs.usage, ...shared });
+      return deterministicAnswer("INVALID_RANK_OUTPUT", actualModel);
+    }
+    const candidateIds = input.candidates.map((candidate) => candidate.id);
+    if (!validateRankingReferences(candidateIds, parsed.data.selectedCandidateId, parsed.data.candidateScores.map((entry) => entry.candidateId))) {
+      logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "error", ...correlation, httpStatus: 200, durationMs: Date.now() - startedAt, errorCode: "INVALID_RANK_IDS", errorType: "InvalidProviderOutput", usage: crs.usage, ...shared });
+      return deterministicAnswer("INVALID_RANK_IDS", actualModel);
+    }
+    logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model: actualModel, outcome: "success", ...correlation, httpStatus: 200, durationMs: Date.now() - startedAt, usage: crs.usage, ...shared });
+    return noStoreJson({ requestId, ranking: parsed.data, source: "live", model: actualModel, diagnostics: { requestId, boardBytes, candidateCount: input.candidates.length } });
+  } catch (error) {
+    const metadata = safeErrorMetadata(error);
+    logApiDiagnostic({ requestId, route: "/api/outfits/rank", provider: "openai-responses", model, outcome: "error", ...metadata, ...correlation, durationMs: Date.now() - startedAt, errorCode: "RANK_PROVIDER_FAILED", ...shared });
+    return apiError(requestId, 502, "RANK_PROVIDER_FAILED", "I’ve put together a simpler option for now.", true);
+  }
+}
 
 const RankRequestSchema = z.object({
   requestId: z.string().uuid(),
@@ -132,9 +201,17 @@ export async function POST(request: Request) {
     const imageMime = requestImageMime(input.candidates);
     const deterministic = [...input.candidates].sort((a, b) => b.deterministicScore - a.deterministicScore)[0];
     if (process.env.AI_MODE !== "live") return noStoreJson({ requestId, ranking: { selectedCandidateId: deterministic.id, mainReason: "A legal, cohesive answer for today.", candidateScores: [] }, source: "mock", model: null, diagnostics: { requestId, boardBytes, candidateCount: input.candidates.length } });
+    const model = process.env.OPENAI_RANK_MODEL ?? "gpt-5.6";
+    // Resolve the ranking endpoint before constructing an OpenAI client, so a
+    // CRS-hosted vision model needs no OpenAI credential at all.
+    const rankBaseUrl = process.env.OPENAI_RANK_BASE_URL ?? process.env.OPENAI_LANGUAGE_BASE_URL;
+    const rankUsesOpenAI = !rankBaseUrl || /^https:\/\/api\.openai\.com\/v1\/?$/i.test(rankBaseUrl);
+    const rankApiKey = rankUsesOpenAI ? process.env.OPENAI_API_KEY : process.env.CRS_API_KEY ?? process.env.OPENAI_API_KEY;
+    if (!rankUsesOpenAI && rankBaseUrl && rankApiKey && !compatibilityStage) {
+      return await rankThroughCrs({ input, requestId, model, baseUrl: rankBaseUrl, apiKey: rankApiKey, deterministic, correlation, boardBytes, boardWidth, boardHeight, imageMime });
+    }
     if (!process.env.OPENAI_API_KEY) return apiError(requestId, 503, "NOT_CONFIGURED", "Live ranking is not configured.", true);
     const openai = new OpenAI(openAIClientOptions(process.env.OPENAI_API_KEY));
-    const model = process.env.OPENAI_RANK_MODEL ?? "gpt-5.6";
     if (compatibilityStage) {
       const compatibilityStartedAt = Date.now();
       try { return await runCompatibilityStage(input, compatibilityStage, requestId, openai, model); }

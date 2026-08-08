@@ -27,6 +27,7 @@ In production live mode, provider-backed routes require both Upstash REST creden
 ## External providers
 
 - OpenAI Responses: item model `gpt-5.6-terra`, rank model `gpt-5.6`, Structured Outputs, `store: false`.
+- Visual ranking may instead run on the CRS-compatible endpoint (`OPENAI_RANK_BASE_URL`, defaulting to `OPENAI_LANGUAGE_BASE_URL`) with `CRS_API_KEY`. That endpoint is stream-only and ignores `text.format`, so the ranking schema is stated in the instructions and the returned text is validated with the same `OutfitRankingResultSchema`; an unparseable or non-covering response falls back to the deterministic candidate exactly as an OpenAI failure does. Realtime keeps using `OPENAI_API_KEY` against OpenAI directly.
 - OpenAI Realtime: `gpt-realtime-2.1-mini` in development and `gpt-realtime-2.1` for production demo through an ephemeral client secret.
 - Photoroom: `/v1/segment`, transparent WebP, `size=medium`, `crop=true`.
 - Open-Meteo: next 12 hours, normalized before reaching product code.

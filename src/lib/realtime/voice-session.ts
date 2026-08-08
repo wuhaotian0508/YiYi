@@ -102,6 +102,10 @@ const RESPONSE_CREATE_ACK_TIMEOUT_MS = 10_000;
 const FUNCTION_CALL_START_TIMEOUT_MS = 25_000;
 const TOOL_DISPATCH_TIMEOUT_MS = 10_000;
 const TOOL_EXECUTION_TIMEOUT_MS = 45_000;
+// One outfit turn renders candidate boards, waits on listwise visual ranking, and
+// commits a version. Ranking alone measured up to 18.5s, so the tool budget sits
+// above it while staying under the adapter's execution watchdog.
+const OUTFIT_TOOL_TIMEOUT_MS = 40_000;
 
 const VoiceToolResultSchema = z.object({
   success: z.boolean(),
@@ -210,8 +214,8 @@ export function createRealtimeVoiceTools(handlers: VoiceToolHandlers, purpose: V
   });
   if (purpose === "fine-tune") return [preferenceTool];
   return [
-    strictRealtimeTool({ name: "request_outfit_recommendation", description: "Start the required first outfit transaction. Return the user's concise original request plus short activity, feeling, exclusion, and semantic wardrobe-anchor phrases. Never invent local IDs, confidence, ambiguity, priorities, or internal constraints. wardrobeAnchors contains only items the user explicitly asked to wear, keep, include, or use.", schema: InitialRecommendationVoiceRequestSchema, timeoutMs: 25_000, execute: (input) => handlers.requestRecommendation(input) }),
-    strictRealtimeTool({ name: "handle_outfit_turn", description: "Route every follow-up turn through one verified application action. Supply the user's concise request, an optional semantic target slot/description, and availability only for an availability action. Use no_change for background speech or conversation that should not mutate the outfit.", schema: VoiceTurnActionSchema, timeoutMs: 25_000, execute: (input) => handlers.handleTurn(input) }),
+    strictRealtimeTool({ name: "request_outfit_recommendation", description: "Start the required first outfit transaction. Return the user's concise original request plus short activity, feeling, exclusion, and semantic wardrobe-anchor phrases. Never invent local IDs, confidence, ambiguity, priorities, or internal constraints. wardrobeAnchors contains only items the user explicitly asked to wear, keep, include, or use.", schema: InitialRecommendationVoiceRequestSchema, timeoutMs: OUTFIT_TOOL_TIMEOUT_MS, execute: (input) => handlers.requestRecommendation(input) }),
+    strictRealtimeTool({ name: "handle_outfit_turn", description: "Route every follow-up turn through one verified application action. Supply the user's concise request, an optional semantic target slot/description, and availability only for an availability action. Use no_change for background speech or conversation that should not mutate the outfit.", schema: VoiceTurnActionSchema, timeoutMs: OUTFIT_TOOL_TIMEOUT_MS, execute: (input) => handlers.handleTurn(input) }),
     preferenceTool,
   ];
 }

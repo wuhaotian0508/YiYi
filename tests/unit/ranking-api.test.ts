@@ -95,6 +95,51 @@ describe("ranking boundary semantics", () => {
     expect(await response.json()).toMatchObject({ error: { code: "INVALID_RANK_REQUEST" } });
   });
 
+  it("ranks through the stream-only CRS endpoint, which ignores text.format", async () => {
+    vi.stubEnv("AI_MODE", "live");
+    vi.stubEnv("OPENAI_API_KEY", "sk-test-only");
+    vi.stubEnv("CRS_API_KEY", "cr-test-only");
+    vi.stubEnv("OPENAI_RANK_BASE_URL", "https://crs.example.com/openai");
+    vi.stubEnv("OPENAI_RANK_MODEL", "gpt-test-vision");
+    const ranking = { selectedCandidateId: candidateId, mainReason: "Clean and cohesive for today.", candidateScores: [{ candidateId, visualCoherence: 0.9, colorBalance: 0.8, silhouetteBalance: 0.8, materialHarmony: 0.7, styleClarity: 0.9, reason: "Balanced neutral pairing.", concerns: [] }] };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      `data: ${JSON.stringify({ type: "response.output_text.done", text: JSON.stringify(ranking) })}\n\ndata: [DONE]\n\n`,
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    ));
+
+    const response = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify(routeBody) }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ source: "live", model: "gpt-test-vision", ranking: { selectedCandidateId: candidateId } });
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(String(url)).toBe("https://crs.example.com/openai/responses");
+    const sent = JSON.parse(String((init as RequestInit).body));
+    // CRS rejects non-streaming requests and drops text.format, so the schema
+    // has to travel in the instructions and the images in the user turn.
+    expect(sent.stream).toBe(true);
+    expect(sent.text).toBeUndefined();
+    expect(sent.input[0].content[0].text).toContain("selectedCandidateId");
+    expect(sent.input[1].content.filter((part: { type: string }) => part.type === "input_image")).toHaveLength(1);
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer cr-test-only" });
+  });
+
+  it("falls back deterministically when the CRS ranking omits a supplied candidate", async () => {
+    vi.stubEnv("AI_MODE", "live");
+    vi.stubEnv("OPENAI_API_KEY", "sk-test-only");
+    vi.stubEnv("CRS_API_KEY", "cr-test-only");
+    vi.stubEnv("OPENAI_RANK_BASE_URL", "https://crs.example.com/openai");
+    const incomplete = { selectedCandidateId: candidateId, mainReason: "Missing every score.", candidateScores: [] };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      `data: ${JSON.stringify({ type: "response.output_text.done", text: JSON.stringify(incomplete) })}\n\ndata: [DONE]\n\n`,
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    ));
+
+    const response = await rankRoute(new Request("http://localhost/api/outfits/rank", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": crypto.randomUUID() }, body: JSON.stringify(routeBody) }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ source: "fallback", diagnostics: { errorCode: "INVALID_RANK_IDS" } });
+  });
+
   it("classifies malformed JSON separately from an invalid ranking schema", async () => {
     vi.stubEnv("AI_MODE", "mock");
     const malformed = await rankRoute(new Request("http://localhost/api/outfits/rank", {
