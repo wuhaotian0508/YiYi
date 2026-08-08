@@ -54,7 +54,7 @@ export async function POST(request: Request) {
         audio: {
           input: {
             noise_reduction: { type: "near_field" },
-            transcription: { model: "gpt-4o-mini-transcribe" },
+            transcription: { model: "gpt-live-transcribe" },
             turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false },
           },
           output: { voice },

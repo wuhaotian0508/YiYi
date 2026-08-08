@@ -353,7 +353,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           config: {
             audio: {
               input: {
-                transcription: { model: "gpt-4o-mini-transcribe" },
+                transcription: { model: "gpt-live-transcribe" },
                 turnDetection: yiyiTurnDetection,
               },
             },
@@ -483,7 +483,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           const turnDetection = objectRecord(input?.turn_detection);
           const expectedTool = this.options.purpose === "fine-tune" ? "save_explicit_preference" : INITIAL_RECOMMENDATION_TOOL;
           const responseOwnedByApplication = turnDetection?.create_response === false && turnDetection?.interrupt_response === false;
-          const transcriptionReady = transcription?.model === "gpt-4o-mini-transcribe";
+          const transcriptionReady = transcription?.model === "gpt-live-transcribe";
           // `response.create` below owns the Today turn and explicitly requires
           // an application tool. Keeping the initial session in the provider's
           // default tool-choice mode avoids rejecting an otherwise valid WebRTC

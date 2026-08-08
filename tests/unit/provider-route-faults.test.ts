@@ -51,7 +51,7 @@ describe("paid provider fault boundaries", () => {
       session: expect.objectContaining({
         audio: expect.objectContaining({
           input: expect.objectContaining({
-            transcription: { model: "gpt-4o-mini-transcribe" },
+            transcription: { model: "gpt-live-transcribe" },
             turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false },
           }),
         }),
