@@ -9,6 +9,7 @@ import TodayPage from "@/app/today/page";
 import { VoiceConnectionFailure, type TranscriptState, type VoiceSessionAdapter, type VoiceState } from "@/lib/realtime/voice-session";
 import { voiceSessionCoordinator } from "@/lib/realtime/voice-session-coordinator";
 import { db } from "@/lib/storage/db";
+import { demoWardrobe } from "@/mocks/wardrobe";
 
 class TranscriptVoiceAdapter implements VoiceSessionAdapter {
   private readonly states = new Set<(state: VoiceState) => void>();
@@ -80,5 +81,75 @@ describe("Today live voice recovery", () => {
     const transcript = await screen.findByRole("heading", { name: "“Hiking, then dinner.”" });
     await waitFor(() => expect(transcript).toBeVisible());
     expect(screen.queryByText(/I found one for you/)).not.toBeInTheDocument();
+  });
+
+  it("shows a live partial caption while revising an outfit that already exists", async () => {
+    const dateKey = (() => {
+      const date = new Date();
+      return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+    })();
+    const sessionId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const outfitId = crypto.randomUUID();
+    const neutralIntent = {
+      activities: [],
+      aestheticTerms: [],
+      comfortPriority: 3,
+      photoPriority: 3,
+      walkingIntensity: 2,
+      excludedCategories: [],
+      excludedItemIds: [],
+      requiredItemIds: [],
+      temporaryPreferences: [],
+      freeformSummary: "",
+    };
+    await db.wardrobeItems.bulkPut(demoWardrobe);
+    await db.dailySessions.put({
+      id: sessionId,
+      dateKey,
+      status: "active",
+      intent: neutralIntent,
+      weather: null,
+      currentVersionId: versionId,
+      mainRecommendationId: outfitId,
+      alternativeIds: [],
+      historyVersionIds: [],
+      shownOutfitIds: [outfitId],
+      operationGeneration: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      confirmedAt: null,
+    });
+    await db.outfitVersions.put({
+      id: versionId,
+      sessionId,
+      parentVersionId: null,
+      outfit: {
+        id: outfitId,
+        itemIds: {
+          top: "22222222-2222-4222-8222-222222222222",
+          bottom: "33333333-3333-4333-8333-333333333331",
+          shoes: "44444444-4444-4444-8444-444444444441",
+        },
+        deterministicScore: 0.8,
+        reason: "A clean, comfortable answer for today.",
+      },
+      revisionRequest: null,
+      changedItemIds: [],
+      preservedItemIds: [],
+      createdAt: Date.now(),
+    });
+
+    render(<TodayPage />);
+
+    // The page hydrates the persisted outfit and lands on the result view.
+    await screen.findByRole("button", { name: /Wear this today/ });
+
+    const adapter = new TranscriptVoiceAdapter();
+    await voiceSessionCoordinator.start("today", () => adapter);
+    adapter.emitState("listening");
+    adapter.emitTranscript({ role: "user", text: "Make it warmer", final: false });
+
+    await waitFor(() => expect(screen.getByText("Make it warmer")).toBeVisible());
   });
 });
