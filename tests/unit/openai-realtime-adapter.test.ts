@@ -298,6 +298,44 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(transcripts.at(-1)).toEqual({ role: "user", text: "Hiking and dinner.", final: false });
   });
 
+  it("publishes the tool's restated request when the project has no input-transcription model", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+    const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
+    adapter.onTranscript((transcript) => transcripts.push(transcript));
+
+    // The provider rejects the entitled-model-only transcription request, so no
+    // transcription event ever arrives for this turn.
+    session.emit("transport_event", {
+      type: "conversation.item.input_audio_transcription.failed",
+      item_id: "user-1",
+      error: { code: "model_not_found", type: "invalid_request_error" },
+    });
+    const recommendationTool = (session.agent as { tools: Array<{ name: string; execute(value: unknown): Promise<unknown> }> })
+      .tools.find((tool) => tool.name === "request_outfit_recommendation")!;
+    await recommendationTool.execute({ userRequest: "Gallery this afternoon and lots of walking.", activityPhrases: [], desiredFeelings: [], exclusions: [], wardrobeAnchors: [] });
+
+    expect(transcripts).toEqual([{ role: "user", text: "Gallery this afternoon and lots of walking.", final: true }]);
+  });
+
+  it("lets a real transcription win over the tool's restated request for the same turn", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+    const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
+    adapter.onTranscript((transcript) => transcripts.push(transcript));
+
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.completed", item_id: "user-1", transcript: "Gallery this afternoon, and lots of walking." });
+    const recommendationTool = (session.agent as { tools: Array<{ name: string; execute(value: unknown): Promise<unknown> }> })
+      .tools.find((tool) => tool.name === "request_outfit_recommendation")!;
+    await recommendationTool.execute({ userRequest: "Gallery and walking.", activityPhrases: [], desiredFeelings: [], exclusions: [], wardrobeAnchors: [] });
+
+    expect(transcripts).toEqual([{ role: "user", text: "Gallery this afternoon, and lots of walking.", final: true }]);
+  });
+
   it("refuses to listen when the acknowledged server session still owns response creation", async () => {
     sdk.effectiveSession = {
       tool_choice: "required",
