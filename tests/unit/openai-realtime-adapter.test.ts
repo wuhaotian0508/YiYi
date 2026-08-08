@@ -4,7 +4,7 @@ const sdk = vi.hoisted(() => {
   const defaultEffectiveSession = () => ({
     tool_choice: "required",
     tools: [{ type: "function", name: "request_outfit_recommendation" }],
-    audio: { input: { transcription: { model: "gpt-live-transcribe" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
+    audio: { input: { transcription: { model: "gpt-4o-mini-transcribe" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
   });
   const sessions: Array<{
     listeners: Map<string, Set<(...args: unknown[]) => void>>;
@@ -224,7 +224,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
 
     expect(session.options).toMatchObject({
       config: {
-        audio: { input: { transcription: { model: "gpt-live-transcribe" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
+        audio: { input: { transcription: { model: "gpt-4o-mini-transcribe" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
       },
     });
     expect((session.options as { config: Record<string, unknown> }).config).not.toHaveProperty("toolChoice");
