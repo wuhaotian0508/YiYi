@@ -608,12 +608,15 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           this.record("audio", "success", { realtimeEvent: event.type, transcriptStatus: "receiving" });
         }
         if (event.type === "conversation.item.input_audio_transcription.delta") {
-          const delta = event.delta.trim();
+          const delta = event.delta;
           if (!delta) return;
           if (!this.isCurrentInputTranscriptItem(event.item_id, true)) return;
           const prior = this.partialInputTranscripts.get(event.item_id) ?? "";
-          const separator = prior && !/\s$/.test(prior) && !/^\s/.test(delta) && /[A-Za-z0-9]$/.test(prior) && /^[A-Za-z0-9]/.test(delta) ? " " : "";
-          const text = `${prior}${separator}${delta}`.trim();
+          // Provider deltas are append-only fragments and may split inside a
+          // word. Preserve their exact boundaries; only discard leading space
+          // before the first meaningful fragment for clean UI presentation.
+          const text = `${prior}${delta}`.trimStart();
+          if (!text) return;
           this.partialInputTranscripts.set(event.item_id, text);
           const signature = `${event.item_id}:partial:${text}`;
           if (this.transcriptSignatures.user === signature) return;

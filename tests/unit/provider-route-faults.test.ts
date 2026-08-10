@@ -12,6 +12,7 @@ vi.mock("openai", async (importOriginal) => ({
 }));
 
 import { POST as rankOutfits } from "@/app/api/outfits/rank/route";
+import { GET as getHealth } from "@/app/api/health/route";
 import { POST as createRealtimeToken } from "@/app/api/realtime/token/route";
 import { POST as processWardrobeItem } from "@/app/api/wardrobe/process/route";
 import { demoIntent } from "@/mocks/wardrobe";
@@ -38,11 +39,19 @@ afterEach(() => {
 });
 
 describe("paid provider fault boundaries", () => {
+  it("reports the same production Realtime defaults used by token creation", async () => {
+    const response = getHealth();
+    await expect(response.json()).resolves.toMatchObject({
+      realtimeModel: "gpt-realtime-2.1",
+      realtimeTranscriptionModel: "gpt-live-transcribe",
+      realtimeVoice: "marin",
+    });
+  });
+
   it("configures the Realtime token for conservative automatic interruption", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "live");
     vi.stubEnv("OPENAI_API_KEY", "test-key");
-    vi.stubEnv("OPENAI_REALTIME_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe-2025-12-15");
     provider.clientSecret.mockResolvedValue({ value: "ek_test-only", expires_at: 1_800_000_000 });
 
     const response = await createRealtimeToken(new Request("http://localhost/api/realtime/token", { method: "POST", headers: { "x-forwarded-for": crypto.randomUUID() } }));
@@ -52,15 +61,18 @@ describe("paid provider fault boundaries", () => {
       session: expect.objectContaining({
         audio: expect.objectContaining({
           input: expect.objectContaining({
-            transcription: { model: "gpt-4o-mini-transcribe-2025-12-15" },
+            transcription: { model: "gpt-live-transcribe" },
             turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false },
           }),
         }),
       }),
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     await expect(response.json()).resolves.toMatchObject({
-      transcriptionModel: "gpt-4o-mini-transcribe-2025-12-15",
+      transcriptionModel: "gpt-live-transcribe",
     });
+    const request = provider.clientSecret.mock.calls[0]?.[0] as { session: { audio: { input: { transcription: Record<string, unknown> } } } };
+    expect(request.session.audio.input.transcription).not.toHaveProperty("language");
+    expect(request.session.audio.input.transcription).not.toHaveProperty("languages");
   });
 
   it("keeps official Realtime calls off the CRS text endpoint", async () => {

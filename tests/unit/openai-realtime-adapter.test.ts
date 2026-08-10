@@ -4,7 +4,7 @@ const sdk = vi.hoisted(() => {
   const defaultEffectiveSession = () => ({
     tool_choice: "required",
     tools: [{ type: "function", name: "request_outfit_recommendation" }],
-    audio: { input: { transcription: { model: "gpt-4o-mini-transcribe-2025-12-15" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
+    audio: { input: { transcription: { model: "gpt-live-transcribe" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
   });
   const sessions: Array<{
     listeners: Map<string, Set<(...args: unknown[]) => void>>;
@@ -224,7 +224,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
 
     expect(session.options).toMatchObject({
       config: {
-        audio: { input: { transcription: { model: "gpt-4o-mini-transcribe-2025-12-15" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
+        audio: { input: { transcription: { model: "gpt-live-transcribe" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
       },
     });
     expect((session.options as { config: Record<string, unknown> }).config).not.toHaveProperty("toolChoice");
@@ -298,6 +298,21 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(transcripts.at(-1)).toEqual({ role: "user", text: "Hiking and dinner.", final: false });
   });
 
+  it("appends official transcription deltas verbatim when a word spans chunks", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
+    adapter.onTranscript((transcript) => transcripts.push(transcript));
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.delta", item_id: "user-1", delta: "Lots of walk" });
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.delta", item_id: "user-1", delta: "ing" });
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.delta", item_id: "user-1", delta: ", then dinner." });
+
+    expect(transcripts.at(-1)).toEqual({ role: "user", text: "Lots of walking, then dinner.", final: false });
+  });
+
   it("uses the tool request only as semantic input and never presents it as verbatim transcript", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
@@ -326,7 +341,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
       tools: [{ type: "function", name: "request_outfit_recommendation" }],
       audio: { input: { transcription: null, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
     };
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin", transcriptionModel: "gpt-4o-mini-transcribe-2025-12-15" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin", transcriptionModel: "gpt-live-transcribe" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
 
     await expect(adapter.connect()).resolves.toBeUndefined();
@@ -335,7 +350,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
   });
 
   it("does not let a late completed transcript from an older item replace the current partial", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin", transcriptionModel: "gpt-4o-mini-transcribe-2025-12-15" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin", transcriptionModel: "gpt-live-transcribe" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
     const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
     adapter.onTranscript((transcript) => transcripts.push(transcript));

@@ -42,6 +42,32 @@ async function expectSharedTodayAxis(page: import("@playwright/test").Page) {
   }
 }
 
+async function expectOutfitPaintWithinStage(page: import("@playwright/test").Page) {
+  const stage = await page.locator(".single-outfit-stage").boundingBox();
+  expect(stage).not.toBeNull();
+  const visuals = await page.locator(".single-outfit-stage .outfit-item-visual > :is(.garment, .garment-photo, .garment-local, .garment-demo-asset)").all();
+  expect(visuals.length).toBeGreaterThan(0);
+  for (const visual of visuals) {
+    const box = await visual.boundingBox();
+    const slot = await visual.locator("xpath=../..").getAttribute("data-slot");
+    const imageAsset = await visual.evaluate((element) => !element.classList.contains("garment"));
+    expect(box).not.toBeNull();
+    expect(box!.x + (box!.width / 2), `${slot} horizontal center`).toBeGreaterThanOrEqual(stage!.x);
+    expect(box!.x + (box!.width / 2), `${slot} horizontal center`).toBeLessThanOrEqual(stage!.x + stage!.width);
+    expect(box!.y + (box!.height / 2), `${slot} vertical center`).toBeGreaterThanOrEqual(stage!.y);
+    expect(box!.y + (box!.height / 2), `${slot} vertical center`).toBeLessThanOrEqual(stage!.y + stage!.height);
+    // Image assets deliberately include transparent optical padding; their
+    // visual center is the stable browser-level boundary we can assert.
+    if (imageAsset) continue;
+    // CSS transforms land on fractional device pixels. Two CSS pixels cover
+    // raster rounding while still catching meaningful garment clipping.
+    expect(box!.x, `${slot} left edge`).toBeGreaterThanOrEqual(stage!.x - 2);
+    expect(box!.y, `${slot} top edge`).toBeGreaterThanOrEqual(stage!.y - 2);
+    expect(box!.x + box!.width, `${slot} right edge`).toBeLessThanOrEqual(stage!.x + stage!.width + 2);
+    expect(box!.y + box!.height, `${slot} bottom edge`).toBeLessThanOrEqual(stage!.y + stage!.height + 2);
+  }
+}
+
 test("keeps one Today result owner and non-overlapping regions on iPhone viewports", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("yiyi:test-auto-voice", "true");
@@ -55,6 +81,7 @@ test("keeps one Today result owner and non-overlapping regions on iPhone viewpor
     await page.waitForTimeout(180);
     await expectOrderedTodayResult(page);
     await expectSharedTodayAxis(page);
+    await expectOutfitPaintWithinStage(page);
   }
 });
 
@@ -103,6 +130,7 @@ test("capture YiYi result review set", async ({ page, browserName }) => {
     await page.waitForTimeout(400);
     await expectOrderedTodayResult(page);
     await expectSharedTodayAxis(page);
+    await expectOutfitPaintWithinStage(page);
     await expect(page.locator('section[aria-label="Today page"]')).toHaveScreenshot(`today-result-${width}x${height}.png`, {
       animations: "disabled",
       maxDiffPixelRatio: 0.008,
@@ -152,6 +180,12 @@ test("capture reduced-motion result review set", async ({ page, browserName }) =
   await expect(page.getByText("I’d wear this one today.")).toBeVisible({ timeout: 8_000 });
   for (const [width, height] of iPhoneSizes) {
     await page.setViewportSize({ width, height });
+    await page.waitForTimeout(180);
+    await expectOrderedTodayResult(page);
+    await expectSharedTodayAxis(page);
+    await expectOutfitPaintWithinStage(page);
+    expect(await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth })))
+      .toEqual({ scrollWidth: width, clientWidth: width });
     await page.screenshot({ path: resolve(output, `${width}x${height}-today-reduced.png`), fullPage: true });
   }
 });

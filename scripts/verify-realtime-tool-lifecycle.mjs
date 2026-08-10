@@ -2,6 +2,10 @@ import { OpenAIRealtimeWebSocket, RealtimeAgent, RealtimeSession, tool } from "@
 
 const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) throw new Error("OPENAI_API_KEY is required for this opt-in live smoke.");
+const realtimeModel = process.env.OPENAI_REALTIME_MODEL;
+if (!realtimeModel) throw new Error("OPENAI_REALTIME_MODEL is required for this opt-in live smoke.");
+const transcriptionModel = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL;
+if (!transcriptionModel) throw new Error("OPENAI_REALTIME_TRANSCRIPTION_MODEL is required for this opt-in live smoke.");
 
 const startedAt = Date.now();
 const timeline = {};
@@ -36,7 +40,7 @@ const agent = new RealtimeAgent({
 });
 const transport = new OpenAIRealtimeWebSocket({ useInsecureApiKey: true });
 const session = new RealtimeSession(agent, {
-  model: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1",
+  model: realtimeModel,
   transport,
   tracingDisabled: true,
   historyStoreAudio: false,
@@ -44,7 +48,7 @@ const session = new RealtimeSession(agent, {
     outputModalities: ["text"],
     toolChoice: "required",
     parallelToolCalls: false,
-    audio: { input: { transcription: { model: process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL ?? "gpt-4o-mini-transcribe-2025-12-15", language: "en" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
+    audio: { input: { transcription: { model: transcriptionModel }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
   },
 });
 
