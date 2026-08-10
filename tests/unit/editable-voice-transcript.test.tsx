@@ -7,9 +7,16 @@ describe("EditableVoiceTranscript", () => {
   it("shows the transcript and enters edit mode from the pencil", () => {
     render(<EditableVoiceTranscript text="Dinner tonight, lots of walking." onCommit={vi.fn()} onCancel={vi.fn()} />);
 
+    expect(screen.getByText("What YiYi heard")).toBeVisible();
+    expect(document.querySelector(".transcript-waveform")).not.toBeInTheDocument();
     expect(screen.getByText("Dinner tonight, lots of walking.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Edit transcript" }));
     expect(screen.getByRole("textbox", { name: "Voice transcript" })).toHaveValue("Dinner tonight, lots of walking.");
+  });
+
+  it("uses full mobile hit targets for transcript controls", () => {
+    render(<EditableVoiceTranscript text="Dinner tonight." onCommit={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Edit transcript" })).toHaveClass("transcript-action");
   });
 
   it("commits edited text with the checkmark", () => {

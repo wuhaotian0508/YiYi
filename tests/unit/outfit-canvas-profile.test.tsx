@@ -14,6 +14,25 @@ vi.mock("motion/react", async (importOriginal) => ({
 afterEach(cleanup);
 
 describe("OutfitCanvas React profile", () => {
+  it("selects a composition template from the outfit structure", () => {
+    const separates = OutfitSchema.parse({ id: crypto.randomUUID(), itemIds: { top: demoWardrobe[2].id, bottom: demoWardrobe[5].id, shoes: demoWardrobe[8].id }, deterministicScore: 80 });
+    const onePieceItem = { ...demoWardrobe[2], id: crypto.randomUUID(), category: "one_piece" as const, subtype: "Dress" };
+    const onePiece = OutfitSchema.parse({ id: crypto.randomUUID(), itemIds: { onePiece: onePieceItem.id, shoes: demoWardrobe[8].id }, deterministicScore: 80 });
+    const wardrobe = [...demoWardrobe, onePieceItem];
+    const view = render(<OutfitCanvas outfit={separates} wardrobe={wardrobe} />);
+
+    expect(view.container.querySelector(".outfit-canvas")).toHaveAttribute("data-template", "separates");
+    view.rerender(<OutfitCanvas outfit={onePiece} wardrobe={wardrobe} />);
+    expect(view.container.querySelector(".outfit-canvas")).toHaveAttribute("data-template", "one-piece");
+  });
+
+  it("lets the actual garment slot own revision emphasis", () => {
+    const outfit = OutfitSchema.parse({ id: crypto.randomUUID(), itemIds: { top: demoWardrobe[2].id, bottom: demoWardrobe[5].id, shoes: demoWardrobe[8].id }, deterministicScore: 80 });
+    const view = render(<OutfitCanvas outfit={outfit} wardrobe={demoWardrobe} emphasizedSlot="shoes" />);
+    expect(view.container.querySelector('[data-slot="shoes"]')).toHaveAttribute("data-emphasized", "true");
+    expect(view.container.querySelector('[data-slot="top"]')).not.toHaveAttribute("data-emphasized");
+  });
+
   it("commits a targeted replacement as one bounded update", () => {
     const records: { phase: string; actualDuration: number; baseDuration: number }[] = [];
     const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => records.push({ phase, actualDuration, baseDuration });

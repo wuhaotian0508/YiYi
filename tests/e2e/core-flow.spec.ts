@@ -46,14 +46,17 @@ test("continuous voice recommendation, targeted revision, and confirmation", asy
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  await expect(page.getByText("Session paused.")).toBeVisible();
+  await expect(page.getByText("I’d wear this one today.")).toBeVisible();
   await page.evaluate(() => Object.defineProperty(document, "hidden", { configurable: true, value: false }));
   await page.getByRole("button", { name: "Start live voice session" }).click();
   await expect(page.getByText("I’d wear this one today.")).toBeVisible();
+  await page.getByRole("button", { name: "Open today details" }).click();
   await page.getByRole("button", { name: "Gallery" }).click();
   await page.getByRole("textbox", { name: "Intent tag" }).fill("Museum");
   await page.getByRole("button", { name: "Update outfit" }).click();
+  await page.getByRole("button", { name: "Open today details" }).click();
   await expect(page.getByRole("button", { name: "Museum" })).toBeVisible();
+  await page.getByRole("button", { name: "Dismiss Today details" }).click();
   const beforeRandom = await inspectRecommendationState(page);
   await page.getByRole("button", { name: "Another" }).click();
   await expect.poll(async () => (await inspectRecommendationState(page)).current?.id, { timeout: 8_000 }).not.toBe(beforeRandom.current?.id);

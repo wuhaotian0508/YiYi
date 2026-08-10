@@ -23,6 +23,7 @@ class TranscriptVoiceAdapter implements VoiceSessionAdapter {
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failures.add(listener); return () => this.failures.delete(listener); }
   emitState(state: VoiceState) { this.states.forEach((listener) => listener(state)); }
   emitTranscript(transcript: TranscriptState) { this.transcripts.forEach((listener) => listener(transcript)); }
+  emitFailure(failure: VoiceConnectionFailure) { this.failures.forEach((listener) => listener(failure)); }
 }
 
 describe("Today live voice recovery", () => {
@@ -140,7 +141,7 @@ describe("Today live voice recovery", () => {
       createdAt: Date.now(),
     });
 
-    render(<TodayPage />);
+    const view = render(<TodayPage />);
 
     // The page hydrates the persisted outfit and lands on the result view.
     await screen.findByRole("button", { name: /Wear this today/ });
@@ -150,6 +151,19 @@ describe("Today live voice recovery", () => {
     adapter.emitState("listening");
     adapter.emitTranscript({ role: "user", text: "Make it warmer", final: false });
 
-    await waitFor(() => expect(screen.getByText("Make it warmer")).toBeVisible());
+    await waitFor(() => expect(screen.getByRole("status", { name: "Live voice feedback" })).toHaveTextContent("Make it warmer"));
+    expect(view.container.querySelector(".today-stage > .editable-voice-transcript")).not.toBeInTheDocument();
+  });
+
+  it("keeps internal voice diagnostics out of the user interface", async () => {
+    const adapter = new TranscriptVoiceAdapter();
+    render(<TodayPage />);
+    await voiceSessionCoordinator.start("today", () => adapter);
+    adapter.emitFailure(new VoiceConnectionFailure({ stage: "tool", code: "REALTIME_TOOL_FAILED", requestId: "diag-secret-id" }));
+
+    await screen.findByText("YiYi couldn’t finish that.");
+    expect(screen.queryByText(/REALTIME_TOOL_FAILED/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/diag-secret-id/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^tool$/i)).not.toBeInTheDocument();
   });
 });

@@ -7,11 +7,12 @@ import { motionDuration, motionEase } from "@/lib/motion/tokens";
 
 const slots = ["outerwear", "top", "bottom", "onePiece", "shoes", "bag", "jewelry", "extraAccessory"] as const;
 
-export function OutfitCanvas({ outfit, wardrobe, onSelect, className = "", visibleSlots }: { outfit: Outfit; wardrobe: WardrobeItem[]; onSelect?: (slot: (typeof slots)[number]) => void; className?: string; visibleSlots?: readonly (typeof slots)[number][] }) {
+export function OutfitCanvas({ outfit, wardrobe, onSelect, className = "", visibleSlots, emphasizedSlot }: { outfit: Outfit; wardrobe: WardrobeItem[]; onSelect?: (slot: (typeof slots)[number]) => void; className?: string; visibleSlots?: readonly (typeof slots)[number][]; emphasizedSlot?: (typeof slots)[number] | null }) {
   const reduceMotion = useReducedMotionConfig();
   const lookup = new Map(wardrobe.map((item) => [item.id, item]));
+  const template = outfit.itemIds.onePiece ? "one-piece" : "separates";
   return (
-    <div className={`outfit-canvas ${className}`} aria-label="Recommended outfit">
+    <div className={`outfit-canvas ${className}`} aria-label="Recommended outfit" data-template={template}>
       {slots.map((slot) => {
         if (visibleSlots && !visibleSlots.includes(slot)) return null;
         const id = outfit.itemIds[slot];
@@ -33,7 +34,8 @@ export function OutfitCanvas({ outfit, wardrobe, onSelect, className = "", visib
               </motion.span>
             </AnimatePresence>
         );
-        if (!onSelect) return <div key={slot} className="outfit-piece" data-slot={slot} data-category={item.category}>{visual}</div>;
+        const emphasis = emphasizedSlot === slot ? { "data-emphasized": "true" } : {};
+        if (!onSelect) return <div key={slot} className="outfit-piece" data-slot={slot} data-category={item.category} {...emphasis}>{visual}</div>;
         return (
           <motion.button
             key={slot}
@@ -41,6 +43,7 @@ export function OutfitCanvas({ outfit, wardrobe, onSelect, className = "", visib
             className="outfit-piece"
             data-slot={slot}
             data-category={item.category}
+            {...emphasis}
             onClick={() => onSelect(slot)}
             aria-label={`${item.subtype}. Tap to focus.`}
             whileTap={reduceMotion ? undefined : { scale: 0.96 }}

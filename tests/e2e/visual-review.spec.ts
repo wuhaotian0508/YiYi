@@ -5,6 +5,37 @@ import { seedExplicitDemo } from "./helpers/seed-explicit-demo";
 
 const iPhoneSizes = [[375, 667], [390, 844], [393, 852], [430, 932]] as const;
 
+async function expectOrderedTodayResult(page: import("@playwright/test").Page) {
+  await expect(page.locator(".today-stage > .today-content")).toHaveCount(1);
+  await expect(page.locator(".today-stage > .editable-voice-transcript")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Undo$/ })).toHaveCount(0);
+  const regions = [
+    page.locator(".result-heading"),
+    page.locator(".single-outfit-stage"),
+    page.locator(".result-actions"),
+    page.locator(".voice-dock"),
+  ];
+  const boxes = await Promise.all(regions.map((region) => region.boundingBox()));
+  boxes.forEach((box) => expect(box).not.toBeNull());
+  for (let index = 0; index < boxes.length - 1; index += 1) {
+    expect((boxes[index]?.y ?? 0) + (boxes[index]?.height ?? 0)).toBeLessThanOrEqual((boxes[index + 1]?.y ?? 0) + 1);
+  }
+}
+
+test("keeps one Today result owner and non-overlapping regions on iPhone viewports", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("yiyi:test-auto-voice", "true");
+  });
+  await seedExplicitDemo(page);
+  await page.goto("/today");
+  await page.getByRole("button", { name: "Start live voice session" }).click();
+  await expect(page.getByText("I’d wear this one today.")).toBeVisible({ timeout: 8_000 });
+  for (const [width, height] of iPhoneSizes) {
+    await page.setViewportSize({ width, height });
+    await expectOrderedTodayResult(page);
+  }
+});
+
 test("capture YiYi result review set", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "One rendering engine is sufficient for the manual visual contact sheet.");
   const output = resolve(process.cwd(), "tmp/visual");
@@ -20,8 +51,39 @@ test("capture YiYi result review set", async ({ page, browserName }) => {
   for (const [width, height] of iPhoneSizes) {
     await page.setViewportSize({ width, height });
     await page.waitForTimeout(400);
+    await expectOrderedTodayResult(page);
+    await expect(page.locator('section[aria-label="Today page"] .page-column')).toHaveScreenshot(`today-result-${width}x${height}.png`, {
+      animations: "disabled",
+      maxDiffPixelRatio: 0.008,
+      threshold: 0.22,
+    });
     await page.screenshot({ path: resolve(output, `${width}x${height}-today.png`), fullPage: true });
   }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Open today details" }).click();
+  const details = page.getByRole("dialog", { name: "Today details" });
+  await expect(details).toBeVisible();
+  await expect(details.getByText("What YiYi heard")).toBeVisible();
+  const editTarget = await details.getByRole("button", { name: "Edit transcript" }).boundingBox();
+  expect(editTarget?.width).toBeGreaterThanOrEqual(44);
+  expect(editTarget?.height).toBeGreaterThanOrEqual(44);
+  await page.waitForTimeout(450);
+  await page.screenshot({ path: resolve(output, "390x844-today-details.png"), fullPage: true });
+  await page.getByRole("button", { name: "Dismiss Today details" }).click();
+
+  await page.getByRole("button", { name: /Wear this today/ }).click();
+  await expect(page.getByText("Outfit decided.")).toBeVisible();
+  await expect(page.locator(".confirmed-voice-transcript")).toHaveCount(0);
+  await page.waitForTimeout(450);
+  const [confirmedActions, confirmedDock] = await Promise.all([
+    page.locator(".confirmed-actions").boundingBox(),
+    page.locator(".voice-dock").boundingBox(),
+  ]);
+  expect(confirmedActions).not.toBeNull();
+  expect(confirmedDock).not.toBeNull();
+  expect((confirmedActions?.y ?? 0) + (confirmedActions?.height ?? 0)).toBeLessThanOrEqual((confirmedDock?.y ?? 0) + 1);
+  await page.screenshot({ path: resolve(output, "390x844-today-confirmed.png"), fullPage: true });
 
 });
 

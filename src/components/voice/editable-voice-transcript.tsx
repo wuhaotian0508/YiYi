@@ -10,9 +10,7 @@ type EditableVoiceTranscriptProps = {
   label?: string;
 };
 
-const waveform = [8, 14, 11, 22, 16, 28, 18, 24, 13, 20, 10, 17, 8, 14, 10, 19, 12, 22, 15, 26, 11, 18, 8, 13, 7];
-
-export function EditableVoiceTranscript({ text, onCommit, onCancel, label = "Listening…" }: EditableVoiceTranscriptProps) {
+export function EditableVoiceTranscript({ text, onCommit, onCancel, label = "What YiYi heard" }: EditableVoiceTranscriptProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
   const [error, setError] = useState("");
@@ -41,18 +39,17 @@ export function EditableVoiceTranscript({ text, onCommit, onCancel, label = "Lis
   }
 
   return <section className="editable-voice-transcript" aria-label="Voice transcript">
-    <div className="editable-voice-transcript-heading"><span className="transcript-listening-mark" aria-hidden="true">•••</span><span>{label}</span></div>
+    <div className="editable-voice-transcript-heading"><span>{label}</span></div>
     {editing ? <div className="editable-voice-transcript-editor">
       <textarea aria-label="Voice transcript" value={draft} onChange={(event) => { setDraft(event.target.value); setError(""); }} rows={3} autoFocus />
       <div className="editable-voice-transcript-actions">
-        <button type="button" aria-label="Use edited transcript" onClick={commit}><Check size={18} /></button>
-        <button type="button" aria-label="Cancel transcript edit" onClick={cancel}><X size={18} /></button>
+        <button className="transcript-action" type="button" aria-label="Use edited transcript" onClick={commit}><Check size={18} /></button>
+        <button className="transcript-action" type="button" aria-label="Cancel transcript edit" onClick={cancel}><X size={18} /></button>
       </div>
       {error && <p className="editable-voice-transcript-error" role="alert">{error}</p>}
     </div> : <div className="editable-voice-transcript-display">
       <p>{text}</p>
-      <button type="button" aria-label="Edit transcript" onClick={beginEdit}><Pencil size={18} /></button>
+      <button className="transcript-action" type="button" aria-label="Edit transcript" onClick={beginEdit}><Pencil size={18} /></button>
     </div>}
-    <div className="transcript-waveform" aria-hidden="true">{waveform.map((height, index) => <i key={`${height}-${index}`} style={{ height }} />)}</div>
   </section>;
 }
