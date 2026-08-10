@@ -7,9 +7,11 @@ import { logVoiceDiagnostic, type VoiceDiagnostic } from "@/lib/realtime/voice-d
 import { VoiceTurnController, type VoiceTurnState } from "@/lib/realtime/voice-turn-controller";
 import { resetVoiceAudioEnergy, startVoiceAudioEnergySampler } from "@/lib/realtime/audio-energy";
 import { providerSessionHeaders } from "@/lib/api/client-session";
+import { DEFAULT_REALTIME_TRANSCRIPTION_MODEL } from "@/lib/realtime/config";
 
 export type VoiceState = VoiceTurnState;
 export type TranscriptState = { role: "user" | "assistant"; text: string; final: boolean };
+export type TranscriptCapabilityStatus = "pending" | "configured" | "receiving" | "failed" | "unavailable";
 export type VoiceFailureStage = "permission" | "token" | "session" | "webrtc" | "ready" | "tool" | "recommendation" | "mutation" | "persistence" | "audio" | "cleanup" | "lifecycle";
 
 export class VoiceConnectionFailure extends Error {
@@ -42,6 +44,7 @@ export interface VoiceSessionAdapter {
   interruptAndListen?(): void;
   onState(listener: (state: VoiceState) => void): () => void;
   onTranscript(listener: (transcript: TranscriptState) => void): () => void;
+  onTranscriptStatus?(listener: (status: TranscriptCapabilityStatus) => void): () => void;
   onFailure(listener: (failure: VoiceConnectionFailure) => void): () => void;
   submitDemoTurn?(): void;
 }
@@ -227,6 +230,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
   private connectAbortController: AbortController | null = null;
   private readonly stateListeners = new Set<(state: VoiceState) => void>();
   private readonly transcriptListeners = new Set<(transcript: TranscriptState) => void>();
+  private readonly transcriptStatusListeners = new Set<(status: TranscriptCapabilityStatus) => void>();
   private readonly failureListeners = new Set<(failure: VoiceConnectionFailure) => void>();
   private currentState: VoiceState = "idle";
   private readonly turnController: VoiceTurnController;
@@ -242,10 +246,9 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
   private turnResponseRequested = false;
   private readonly transcriptSignatures: Record<TranscriptState["role"], string> = { user: "", assistant: "" };
   private readonly partialInputTranscripts = new Map<string, string>();
-  // Input transcription is a separately entitled model. When a project cannot
-  // reach one, the turn's only text is the request the Realtime model restates
-  // in its tool call, so track whether real transcription won this turn.
-  private turnHadInputTranscript = false;
+  private readonly inputTranscriptItemOrder = new Map<string, number>();
+  private inputTranscriptSequence = 0;
+  private activeInputTranscriptItemId: string | null = null;
   private readonly diagnostic: (diagnostic: VoiceDiagnostic) => void;
   private readonly now: () => number;
   private readonly startedAt: number;
@@ -321,19 +324,21 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
         });
       }
       if (generation !== this.connectGeneration || connectAbortController.signal.aborted) return;
-      const parsedToken = z.object({ requestId: z.string().uuid().default(() => crypto.randomUUID()), value: z.string().min(1), model: z.string().min(1), voice: z.string().min(1) }).safeParse(payload);
+      const parsedToken = z.object({
+        requestId: z.string().uuid().default(() => crypto.randomUUID()),
+        value: z.string().min(1),
+        model: z.string().min(1),
+        transcriptionModel: z.string().min(1).default(DEFAULT_REALTIME_TRANSCRIPTION_MODEL),
+        voice: z.string().min(1),
+      }).safeParse(payload);
       if (!parsedToken.success) throw new VoiceConnectionFailure({ stage: "token", code: "TOKEN_RESPONSE_INVALID", httpStatus: response.status });
       const token = parsedToken.data;
       this.tokenRequestId = token.requestId;
       let followupInvocation: Promise<VoiceToolResult> | null = null;
       const sessionHandlers: VoiceToolHandlers = {
         ...this.handlers,
-        requestRecommendation: (input) => {
-          this.emitToolRequestTranscript(input.userRequest);
-          return this.handlers.requestRecommendation(input);
-        },
+        requestRecommendation: (input) => this.handlers.requestRecommendation(input),
         handleTurn: (input) => {
-          this.emitToolRequestTranscript(input.userRequest);
           this.record("tool", "started", { toolName: "handle_outfit_turn", voiceAction: input.action });
           followupInvocation ??= this.handlers.handleTurn(input);
           return followupInvocation;
@@ -367,7 +372,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           config: {
             audio: {
               input: {
-                transcription: { model: "gpt-4o-mini-transcribe" },
+                transcription: { model: token.transcriptionModel },
                 turnDetection: yiyiTurnDetection,
               },
             },
@@ -497,19 +502,23 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           const turnDetection = objectRecord(input?.turn_detection);
           const expectedTool = this.options.purpose === "fine-tune" ? "save_explicit_preference" : INITIAL_RECOMMENDATION_TOOL;
           const responseOwnedByApplication = turnDetection?.create_response === false && turnDetection?.interrupt_response === false;
-          const transcriptionReady = transcription?.model === "gpt-4o-mini-transcribe";
+          const effectiveVadType = typeof turnDetection?.type === "string" ? turnDetection.type : undefined;
+          const effectiveTranscriptionModel = typeof transcription?.model === "string" ? transcription.model : undefined;
+          const transcriptConfigured = Boolean(effectiveTranscriptionModel);
           // `response.create` below owns the Today turn and explicitly requires
           // an application tool. Keeping the initial session in the provider's
           // default tool-choice mode avoids rejecting an otherwise valid WebRTC
           // session before the first committed user turn.
-          const effectiveReady = responseOwnedByApplication && transcriptionReady && toolNames.includes(expectedTool);
+          const effectiveReady = responseOwnedByApplication && effectiveVadType === "semantic_vad" && toolNames.includes(expectedTool);
           if (!this.connected) this.effectiveSessionReady = effectiveReady;
+          this.publishTranscriptStatus(transcriptConfigured ? "configured" : "unavailable");
           this.record("ready", effectiveReady ? "success" : "error", {
             realtimeEvent: event.type,
             effectiveToolChoice: typeof sessionPayload?.tool_choice === "string" ? sessionPayload.tool_choice : undefined,
             effectiveToolNames: toolNames,
-            effectiveVadType: typeof turnDetection?.type === "string" ? turnDetection.type : undefined,
-            effectiveTranscriptionModel: typeof transcription?.model === "string" ? transcription.model : undefined,
+            effectiveVadType,
+            effectiveTranscriptionModel,
+            transcriptStatus: transcriptConfigured ? "configured" : "unavailable",
             effectiveCreateResponse: typeof turnDetection?.create_response === "boolean" ? turnDetection.create_response : undefined,
             effectiveInterruptResponse: typeof turnDetection?.interrupt_response === "boolean" ? turnDetection.interrupt_response : undefined,
             ...(!effectiveReady ? { errorCode: "SESSION_CONFIG_MISMATCH" } : {}),
@@ -572,8 +581,9 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           if (this.currentState === "listening") {
             followupInvocation = null;
             this.turnResponseRequested = false;
-            this.turnHadInputTranscript = false;
           }
+          const itemId = typeof event.item_id === "string" ? event.item_id : null;
+          if (itemId) this.isCurrentInputTranscriptItem(itemId, true);
           this.turnController.speechStarted();
         }
         if (event.type === "input_audio_buffer.speech_stopped") {
@@ -589,16 +599,18 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           const text = event.transcript.trim();
           if (!text) return;
           this.partialInputTranscripts.delete(event.item_id);
+          if (!this.isCurrentInputTranscriptItem(event.item_id, true)) return;
           const signature = `${event.item_id}:completed:${text}`;
           if (this.transcriptSignatures.user === signature) return;
           this.transcriptSignatures.user = signature;
-          this.turnHadInputTranscript = true;
           this.emitTranscript({ role: "user", text, final: true });
-          this.record("audio", "success", { realtimeEvent: event.type });
+          this.publishTranscriptStatus("receiving");
+          this.record("audio", "success", { realtimeEvent: event.type, transcriptStatus: "receiving" });
         }
         if (event.type === "conversation.item.input_audio_transcription.delta") {
           const delta = event.delta.trim();
           if (!delta) return;
+          if (!this.isCurrentInputTranscriptItem(event.item_id, true)) return;
           const prior = this.partialInputTranscripts.get(event.item_id) ?? "";
           const separator = prior && !/\s$/.test(prior) && !/^\s/.test(delta) && /[A-Za-z0-9]$/.test(prior) && /^[A-Za-z0-9]/.test(delta) ? " " : "";
           const text = `${prior}${separator}${delta}`.trim();
@@ -606,15 +618,17 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
           const signature = `${event.item_id}:partial:${text}`;
           if (this.transcriptSignatures.user === signature) return;
           this.transcriptSignatures.user = signature;
-          this.turnHadInputTranscript = true;
           this.emitTranscript({ role: "user", text, final: false });
+          this.publishTranscriptStatus("receiving");
         }
         if (event.type === "conversation.item.input_audio_transcription.failed") {
           const error = objectRecord(event.error);
+          if (this.isCurrentInputTranscriptItem(event.item_id, true)) this.publishTranscriptStatus("failed");
           this.record("audio", "error", {
             realtimeEvent: event.type,
             errorCode: typeof error?.code === "string" ? error.code : "INPUT_TRANSCRIPTION_FAILED",
             errorType: typeof error?.type === "string" ? error.type : undefined,
+            transcriptStatus: "failed",
           });
         }
       });
@@ -633,7 +647,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
       });
       session.on("history_updated", (history) => {
         if (!isActive()) return;
-        for (const role of ["user", "assistant"] as const) {
+        for (const role of ["assistant"] as const) {
           const latest = [...history].reverse().find((item) => item.type === "message" && item.role === role);
           if (!latest || latest.type !== "message" || latest.role !== role) continue;
           const text = latest.content.map((content) => "text" in content ? content.text : content.transcript ?? "").join(" ").trim();
@@ -680,7 +694,7 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
     }
   }
 
-  async disconnect() { this.connectGeneration += 1; this.connectPromise = null; this.connectAbortController?.abort(); this.connectAbortController = null; this.clearResponseWatchdogs(); this.clearToolExecutionWatchdog(); this.turnAwaitingTool = false; this.turnResponseRequested = false; this.activeResponseId = null; this.effectiveSessionReady = false; this.partialInputTranscripts.clear(); this.turnHadInputTranscript = false; this.stopAudioEnergySampler?.(); this.stopAudioEnergySampler = null; resetVoiceAudioEnergy(); const session = this.session; this.session = null; this.connected = false; session?.close(); this.turnController.idle(); }
+  async disconnect() { this.connectGeneration += 1; this.connectPromise = null; this.connectAbortController?.abort(); this.connectAbortController = null; this.clearResponseWatchdogs(); this.clearToolExecutionWatchdog(); this.turnAwaitingTool = false; this.turnResponseRequested = false; this.activeResponseId = null; this.effectiveSessionReady = false; this.partialInputTranscripts.clear(); this.inputTranscriptItemOrder.clear(); this.inputTranscriptSequence = 0; this.activeInputTranscriptItemId = null; this.stopAudioEnergySampler?.(); this.stopAudioEnergySampler = null; resetVoiceAudioEnergy(); const session = this.session; this.session = null; this.connected = false; session?.close(); this.turnController.idle(); }
   mute(muted: boolean) { this.session?.mute(muted); }
   commitTurn() {
     this.turnController.primaryAction({
@@ -701,20 +715,22 @@ export class OpenAIRealtimeVoiceAdapter implements VoiceSessionAdapter {
   }
   onState(listener: (state: VoiceState) => void) { this.stateListeners.add(listener); return () => this.stateListeners.delete(listener); }
   onTranscript(listener: (transcript: TranscriptState) => void) { this.transcriptListeners.add(listener); return () => this.transcriptListeners.delete(listener); }
+  onTranscriptStatus(listener: (status: TranscriptCapabilityStatus) => void) { this.transcriptStatusListeners.add(listener); return () => this.transcriptStatusListeners.delete(listener); }
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failureListeners.add(listener); return () => this.failureListeners.delete(listener); }
   private publishState(state: VoiceState) { this.currentState = state; this.stateListeners.forEach((listener) => listener(state)); }
   private emitTranscript(transcript: TranscriptState) { this.transcriptListeners.forEach((listener) => listener(transcript)); }
-  // Every Today tool call carries the user's own request. Publishing it keeps a
-  // turn readable when the project has no entitled input-transcription model.
-  // A real transcription for the same turn always wins.
-  private emitToolRequestTranscript(userRequest: string) {
-    if (this.turnHadInputTranscript) return;
-    const text = userRequest.trim();
-    if (!text) return;
-    const signature = `tool:${text}`;
-    if (this.transcriptSignatures.user === signature) return;
-    this.transcriptSignatures.user = signature;
-    this.emitTranscript({ role: "user", text, final: true });
+  private publishTranscriptStatus(status: TranscriptCapabilityStatus) { this.transcriptStatusListeners.forEach((listener) => listener(status)); }
+  private isCurrentInputTranscriptItem(itemId: string, activateNew: boolean) {
+    let order = this.inputTranscriptItemOrder.get(itemId);
+    if (order === undefined) {
+      order = ++this.inputTranscriptSequence;
+      this.inputTranscriptItemOrder.set(itemId, order);
+      if (activateNew) this.activeInputTranscriptItemId = itemId;
+    }
+    if (!this.activeInputTranscriptItemId) this.activeInputTranscriptItemId = itemId;
+    const activeOrder = this.inputTranscriptItemOrder.get(this.activeInputTranscriptItemId) ?? 0;
+    if (activateNew && order > activeOrder) this.activeInputTranscriptItemId = itemId;
+    return this.activeInputTranscriptItemId === itemId;
   }
   private emitFailure(failure: VoiceConnectionFailure) { this.failureListeners.forEach((listener) => listener(failure)); }
   private requestApplicationResponse() {
@@ -818,6 +834,7 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
 export class MockVoiceSessionAdapter implements VoiceSessionAdapter {
   private readonly stateListeners = new Set<(state: VoiceState) => void>();
   private readonly transcriptListeners = new Set<(transcript: TranscriptState) => void>();
+  private readonly transcriptStatusListeners = new Set<(status: TranscriptCapabilityStatus) => void>();
   private readonly failureListeners = new Set<(failure: VoiceConnectionFailure) => void>();
   private timers: number[] = [];
   constructor(private readonly autoSubmit = false) {}
@@ -837,5 +854,6 @@ export class MockVoiceSessionAdapter implements VoiceSessionAdapter {
   interruptAndListen() { this.stateListeners.forEach((listener) => listener("listening")); }
   onState(listener: (state: VoiceState) => void) { this.stateListeners.add(listener); return () => this.stateListeners.delete(listener); }
   onTranscript(listener: (transcript: TranscriptState) => void) { this.transcriptListeners.add(listener); return () => this.transcriptListeners.delete(listener); }
+  onTranscriptStatus(listener: (status: TranscriptCapabilityStatus) => void) { this.transcriptStatusListeners.add(listener); return () => this.transcriptStatusListeners.delete(listener); }
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failureListeners.add(listener); return () => this.failureListeners.delete(listener); }
 }

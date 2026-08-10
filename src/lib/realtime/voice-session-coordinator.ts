@@ -1,4 +1,4 @@
-import { VoiceConnectionFailure, type TranscriptState, type VoiceFailureStage, type VoiceSessionAdapter, type VoiceState } from "@/lib/realtime/voice-session";
+import { VoiceConnectionFailure, type TranscriptCapabilityStatus, type TranscriptState, type VoiceFailureStage, type VoiceSessionAdapter, type VoiceState } from "@/lib/realtime/voice-session";
 import { logVoiceDiagnostic, type VoiceDiagnostic } from "@/lib/realtime/voice-diagnostics";
 
 export type VoiceOwner = "today" | "fine-tune";
@@ -16,6 +16,7 @@ export type VoiceSessionSnapshot = {
   diagnosticId: string | null;
   latestUserTranscript: TranscriptState | null;
   latestAssistantCaption: TranscriptState | null;
+  transcriptStatus: TranscriptCapabilityStatus;
 };
 
 type ActiveSession = {
@@ -38,6 +39,7 @@ const initialSnapshot: VoiceSessionSnapshot = {
   diagnosticId: null,
   latestUserTranscript: null,
   latestAssistantCaption: null,
+  transcriptStatus: "pending",
 };
 
 export const voiceSessionServerSnapshot = () => initialSnapshot;
@@ -115,6 +117,10 @@ export class VoiceSessionCoordinator {
           ? { ...this.snapshot, latestUserTranscript: transcript }
           : { ...this.snapshot, latestAssistantCaption: transcript });
       }),
+      ...(adapter.onTranscriptStatus ? [adapter.onTranscriptStatus((transcriptStatus) => {
+        if (!this.isActive(active)) return;
+        this.publish({ ...this.snapshot, transcriptStatus });
+      })] : []),
       adapter.onFailure((failure) => {
         if (!this.isActive(active)) return;
         this.publish({ ...this.snapshot, status: "recoverable_error", stage: failure.stage, errorCode: failure.code, diagnosticId: failure.requestId ?? attemptId });
@@ -122,7 +128,7 @@ export class VoiceSessionCoordinator {
         void this.closeRuntimeFailure(active);
       }),
     ];
-    this.publish({ owner, status: "connecting", stage: "token", generation, attemptId, retryAt: null, errorCode: null, diagnosticId: null, latestUserTranscript: null, latestAssistantCaption: null });
+    this.publish({ owner, status: "connecting", stage: "token", generation, attemptId, retryAt: null, errorCode: null, diagnosticId: null, latestUserTranscript: null, latestAssistantCaption: null, transcriptStatus: "pending" });
 
     const promise = adapter.connect().then(
       () => {

@@ -152,6 +152,8 @@ describe("Today live voice recovery", () => {
     adapter.emitTranscript({ role: "user", text: "Make it warmer", final: false });
 
     await waitFor(() => expect(screen.getByRole("status", { name: "Live voice feedback" })).toHaveTextContent("Make it warmer"));
+    expect(screen.getByRole("status", { name: "Live voice feedback" }).closest(".result-supporting-copy")).not.toBeNull();
+    expect(view.container.querySelector(".result-section > .result-live-feedback")).not.toBeInTheDocument();
     expect(view.container.querySelector(".today-stage > .editable-voice-transcript")).not.toBeInTheDocument();
   });
 
@@ -162,6 +164,7 @@ describe("Today live voice recovery", () => {
     adapter.emitFailure(new VoiceConnectionFailure({ stage: "tool", code: "REALTIME_TOOL_FAILED", requestId: "diag-secret-id" }));
 
     await screen.findByText("YiYi couldn’t finish that.");
+    expect(document.querySelector(".error-state .voice-core")).not.toHaveAttribute("disabled");
     expect(screen.queryByText(/REALTIME_TOOL_FAILED/)).not.toBeInTheDocument();
     expect(screen.queryByText(/diag-secret-id/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^tool$/i)).not.toBeInTheDocument();

@@ -20,6 +20,26 @@ async function expectOrderedTodayResult(page: import("@playwright/test").Page) {
   for (let index = 0; index < boxes.length - 1; index += 1) {
     expect((boxes[index]?.y ?? 0) + (boxes[index]?.height ?? 0)).toBeLessThanOrEqual((boxes[index + 1]?.y ?? 0) + 1);
   }
+  for (const name of ["Open today details", "Another", "Wear this today"]) {
+    await page.getByRole("button", { name }).click({ trial: true });
+  }
+}
+
+async function expectSharedTodayAxis(page: import("@playwright/test").Page) {
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  const regions = [
+    { name: "weather", locator: page.locator(".weather-pill") },
+    { name: "heading", locator: page.locator(".result-heading h1") },
+    { name: "outfit", locator: page.locator(".single-outfit-stage .outfit-canvas") },
+    { name: "voice dock", locator: page.locator(".voice-dock-primary") },
+  ];
+  const boxes = await Promise.all(regions.map((region) => region.locator.boundingBox()));
+  boxes.forEach((box) => expect(box).not.toBeNull());
+  for (const [index, box] of boxes.entries()) {
+    const center = (box?.x ?? 0) + ((box?.width ?? 0) / 2);
+    expect(Math.abs(center - (viewport!.width / 2)), `${regions[index].name} center`).toBeLessThanOrEqual(1.5);
+  }
 }
 
 test("keeps one Today result owner and non-overlapping regions on iPhone viewports", async ({ page }) => {
@@ -32,8 +52,38 @@ test("keeps one Today result owner and non-overlapping regions on iPhone viewpor
   await expect(page.getByText("I’d wear this one today.")).toBeVisible({ timeout: 8_000 });
   for (const [width, height] of iPhoneSizes) {
     await page.setViewportSize({ width, height });
+    await page.waitForTimeout(180);
     await expectOrderedTodayResult(page);
+    await expectSharedTodayAxis(page);
   }
+});
+
+test("keeps live listening feedback on the same Today center axis", async ({ page }, testInfo) => {
+  await seedExplicitDemo(page);
+  await page.goto("/today");
+  await page.getByRole("button", { name: "Start live voice session" }).click();
+  await expect(page.getByText("Listening…")).toBeVisible();
+
+  for (const [width, height] of iPhoneSizes) {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(180);
+    const selectors = [".weather-pill", ".session-focus", ".voice-dock-primary"];
+    const boxes = await Promise.all(selectors.map((selector) => page.locator(selector).boundingBox()));
+    boxes.forEach((box) => expect(box).not.toBeNull());
+    for (const [index, box] of boxes.entries()) {
+      const center = (box?.x ?? 0) + ((box?.width ?? 0) / 2);
+      expect(Math.abs(center - (width / 2)), `${selectors[index]} center`).toBeLessThanOrEqual(1.5);
+    }
+    await testInfo.attach(`today-listening-${width}x${height}`, {
+      body: await page.locator('section[aria-label="Today page"]').screenshot({ animations: "disabled" }),
+      contentType: "image/png",
+    });
+  }
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.voice-dock[data-state="listening"]')).toBeVisible();
+  await expect(page.locator(".voice-dock-listening-breath")).toBeVisible();
 });
 
 test("capture YiYi result review set", async ({ page, browserName }) => {
@@ -52,7 +102,8 @@ test("capture YiYi result review set", async ({ page, browserName }) => {
     await page.setViewportSize({ width, height });
     await page.waitForTimeout(400);
     await expectOrderedTodayResult(page);
-    await expect(page.locator('section[aria-label="Today page"] .page-column')).toHaveScreenshot(`today-result-${width}x${height}.png`, {
+    await expectSharedTodayAxis(page);
+    await expect(page.locator('section[aria-label="Today page"]')).toHaveScreenshot(`today-result-${width}x${height}.png`, {
       animations: "disabled",
       maxDiffPixelRatio: 0.008,
       threshold: 0.22,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { classifyRealtimeSessionFailure, VoiceConnectionFailure, type TranscriptState, type VoiceSessionAdapter, type VoiceState } from "@/lib/realtime/voice-session";
+import { classifyRealtimeSessionFailure, VoiceConnectionFailure, type TranscriptCapabilityStatus, type TranscriptState, type VoiceSessionAdapter, type VoiceState } from "@/lib/realtime/voice-session";
 import { VoiceSessionCoordinator } from "@/lib/realtime/voice-session-coordinator";
 
 function deferred<T>() {
@@ -15,6 +15,7 @@ function deferred<T>() {
 class FakeVoiceAdapter implements VoiceSessionAdapter {
   readonly states = new Set<(state: VoiceState) => void>();
   readonly transcripts = new Set<(transcript: TranscriptState) => void>();
+  readonly transcriptStatuses = new Set<(status: TranscriptCapabilityStatus) => void>();
   readonly failures = new Set<(failure: VoiceConnectionFailure) => void>();
   connectCalls = 0;
   disconnectCalls = 0;
@@ -34,11 +35,13 @@ class FakeVoiceAdapter implements VoiceSessionAdapter {
   interruptAndListen() { this.interruptCalls += 1; this.emit("listening"); }
   onState(listener: (state: VoiceState) => void) { this.states.add(listener); return () => this.states.delete(listener); }
   onTranscript(listener: (transcript: TranscriptState) => void) { this.transcripts.add(listener); return () => this.transcripts.delete(listener); }
+  onTranscriptStatus(listener: (status: TranscriptCapabilityStatus) => void) { this.transcriptStatuses.add(listener); return () => this.transcriptStatuses.delete(listener); }
   onFailure(listener: (failure: VoiceConnectionFailure) => void) { this.failures.add(listener); return () => this.failures.delete(listener); }
   emit(state: VoiceState) { this.states.forEach((listener) => listener(state)); }
   fail(failure: VoiceConnectionFailure) { this.failures.forEach((listener) => listener(failure)); this.emit("recoverable_error"); }
   failWithoutState(failure: VoiceConnectionFailure) { this.failures.forEach((listener) => listener(failure)); }
   emitTranscript(transcript: TranscriptState) { this.transcripts.forEach((listener) => listener(transcript)); }
+  emitTranscriptStatus(status: TranscriptCapabilityStatus) { this.transcriptStatuses.forEach((listener) => listener(status)); }
 }
 
 describe("VoiceSessionCoordinator", () => {
@@ -238,5 +241,15 @@ describe("VoiceSessionCoordinator", () => {
       latestUserTranscript: { role: "user", text: "Hiking and dinner.", final: true },
       latestAssistantCaption: { role: "assistant", text: "I found one.", final: true },
     });
+  });
+
+  it("tracks transcript readiness without changing the Voice lifecycle state", async () => {
+    const adapter = new FakeVoiceAdapter();
+    const coordinator = new VoiceSessionCoordinator();
+    await coordinator.start("today", () => adapter);
+    adapter.emit("listening");
+    adapter.emitTranscriptStatus("failed");
+
+    expect(coordinator.getSnapshot()).toMatchObject({ status: "listening", transcriptStatus: "failed" });
   });
 });

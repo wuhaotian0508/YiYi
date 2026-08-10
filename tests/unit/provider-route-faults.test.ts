@@ -42,6 +42,7 @@ describe("paid provider fault boundaries", () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubEnv("NEXT_PUBLIC_VOICE_MODE", "live");
     vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.stubEnv("OPENAI_REALTIME_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe-2025-12-15");
     provider.clientSecret.mockResolvedValue({ value: "ek_test-only", expires_at: 1_800_000_000 });
 
     const response = await createRealtimeToken(new Request("http://localhost/api/realtime/token", { method: "POST", headers: { "x-forwarded-for": crypto.randomUUID() } }));
@@ -51,12 +52,15 @@ describe("paid provider fault boundaries", () => {
       session: expect.objectContaining({
         audio: expect.objectContaining({
           input: expect.objectContaining({
-            transcription: { model: "gpt-4o-mini-transcribe" },
+            transcription: { model: "gpt-4o-mini-transcribe-2025-12-15" },
             turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false },
           }),
         }),
       }),
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    await expect(response.json()).resolves.toMatchObject({
+      transcriptionModel: "gpt-4o-mini-transcribe-2025-12-15",
+    });
   });
 
   it("keeps official Realtime calls off the CRS text endpoint", async () => {

@@ -37,6 +37,7 @@ export type VoiceDiagnostic = {
   requestId?: string;
   effectiveVadType?: string;
   effectiveTranscriptionModel?: string;
+  transcriptStatus?: "configured" | "receiving" | "failed" | "unavailable";
   effectiveCreateResponse?: boolean;
   effectiveInterruptResponse?: boolean;
 };

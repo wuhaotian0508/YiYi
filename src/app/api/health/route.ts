@@ -1,6 +1,7 @@
 import { noStoreJson } from "@/lib/api/responses";
 import { productionProtectionReady, providerRoutesAllowed, rateLimitMode } from "@/lib/api/rate-limit";
 import { SCORING_VERSION } from "@/domain/recommendation/scoring";
+import { DEFAULT_REALTIME_MODEL, DEFAULT_REALTIME_TRANSCRIPTION_MODEL, DEFAULT_REALTIME_VOICE } from "@/lib/realtime/config";
 
 export const runtime = "nodejs";
 
@@ -16,8 +17,9 @@ export function GET() {
     itemModel: process.env.OPENAI_ITEM_MODEL ?? "gpt-5.6-terra",
     rankModel: process.env.OPENAI_RANK_MODEL ?? "gpt-5.6",
     languageModel: process.env.OPENAI_LANGUAGE_MODEL ?? process.env.OPENAI_RANK_MODEL ?? "gpt-5.5",
-    realtimeModel: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-mini",
-    realtimeVoice: process.env.OPENAI_REALTIME_VOICE ?? "marin",
+    realtimeModel: process.env.OPENAI_REALTIME_MODEL ?? DEFAULT_REALTIME_MODEL,
+    realtimeTranscriptionModel: process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    realtimeVoice: process.env.OPENAI_REALTIME_VOICE ?? DEFAULT_REALTIME_VOICE,
     scoringVersion: SCORING_VERSION,
     rateLimitMode: rateLimitMode(),
     productionProtectionReady: productionProtectionReady(),

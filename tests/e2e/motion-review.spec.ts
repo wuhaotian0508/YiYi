@@ -206,6 +206,29 @@ test.describe("motion review", () => {
     await expect(page.locator('[data-review-scenario="outfit"] [data-item-id="11111111-1111-4111-8111-111111111113"]')).toBeVisible();
   });
 
+  test("Voice states stay distinct in normal and reduced motion", async ({ page }, testInfo) => {
+    await openReview(page);
+    await selectScenario(page, "voice", '[data-review-scenario="voice"]');
+    const states = ["idle", "connecting", "listening", "committing", "understanding", "tool_running", "revising", "speaking", "interrupted", "recoverable_error"] as const;
+
+    for (const state of states) {
+      await page.getByRole("button", { name: state, exact: true }).click();
+      await expect(page.locator(`.voice-core[data-state="${state}"]`)).toBeVisible();
+      await expect(page.locator(`.voice-dock[data-state="${state}"]`)).toBeVisible();
+      await testInfo.attach(`voice-${state}`, {
+        body: await page.locator('[data-review-scenario="voice"]').screenshot({ animations: "allow" }),
+        contentType: "image/png",
+      });
+    }
+
+    await page.getByRole("button", { name: "Reduced motion", exact: true }).click();
+    for (const state of ["listening", "understanding", "tool_running", "speaking", "recoverable_error"] as const) {
+      await page.getByRole("button", { name: state, exact: true }).click();
+      await expect(page.locator(`.voice-core[data-state="${state}"]`)).toBeVisible();
+      await expect(page.locator(`.voice-dock[data-state="${state}"]`)).toBeVisible();
+    }
+  });
+
   test("Bottom Sheet owns vertical drag and remains interruptible", async ({ page }) => {
     await openReview(page);
     await selectScenario(page, "sheet", '[data-review-scenario="sheet"]');

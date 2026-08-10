@@ -4,7 +4,7 @@ const sdk = vi.hoisted(() => {
   const defaultEffectiveSession = () => ({
     tool_choice: "required",
     tools: [{ type: "function", name: "request_outfit_recommendation" }],
-    audio: { input: { transcription: { model: "gpt-4o-mini-transcribe" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
+    audio: { input: { transcription: { model: "gpt-4o-mini-transcribe-2025-12-15" }, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
   });
   const sessions: Array<{
     listeners: Map<string, Set<(...args: unknown[]) => void>>;
@@ -224,7 +224,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
 
     expect(session.options).toMatchObject({
       config: {
-        audio: { input: { transcription: { model: "gpt-4o-mini-transcribe" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
+        audio: { input: { transcription: { model: "gpt-4o-mini-transcribe-2025-12-15" }, turnDetection: { type: "semantic_vad", eagerness: "auto", createResponse: false, interruptResponse: false } } },
       },
     });
     expect((session.options as { config: Record<string, unknown> }).config).not.toHaveProperty("toolChoice");
@@ -298,7 +298,7 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     expect(transcripts.at(-1)).toEqual({ role: "user", text: "Hiking and dinner.", final: false });
   });
 
-  it("publishes the tool's restated request when the project has no input-transcription model", async () => {
+  it("uses the tool request only as semantic input and never presents it as verbatim transcript", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
     await adapter.connect();
@@ -317,7 +317,36 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
       .tools.find((tool) => tool.name === "request_outfit_recommendation")!;
     await recommendationTool.execute({ userRequest: "Gallery this afternoon and lots of walking.", activityPhrases: [], desiredFeelings: [], exclusions: [], wardrobeAnchors: [] });
 
-    expect(transcripts).toEqual([{ role: "user", text: "Gallery this afternoon and lots of walking.", final: true }]);
+    expect(transcripts).toEqual([]);
+  });
+
+  it("keeps Voice ready when input transcription is unavailable", async () => {
+    sdk.effectiveSession = {
+      tool_choice: "required",
+      tools: [{ type: "function", name: "request_outfit_recommendation" }],
+      audio: { input: { transcription: null, turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false } } },
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin", transcriptionModel: "gpt-4o-mini-transcribe-2025-12-15" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+
+    await expect(adapter.connect()).resolves.toBeUndefined();
+    sdk.sessions[0]!.emit("transport_event", { type: "input_audio_buffer.speech_stopped" });
+    expect(sdk.sessions[0]!.requestResponse).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a late completed transcript from an older item replace the current partial", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin", transcriptionModel: "gpt-4o-mini-transcribe-2025-12-15" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const adapter = new OpenAIRealtimeVoiceAdapter(handlers, { purpose: "today", requireInitialRecommendation: true });
+    const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
+    adapter.onTranscript((transcript) => transcripts.push(transcript));
+    await adapter.connect();
+    const session = sdk.sessions[0]!;
+
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.delta", item_id: "user-1", delta: "First turn" });
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.delta", item_id: "user-2", delta: "Current turn" });
+    session.emit("transport_event", { type: "conversation.item.input_audio_transcription.completed", item_id: "user-1", transcript: "First turn completed late." });
+
+    expect(transcripts.at(-1)).toEqual({ role: "user", text: "Current turn", final: false });
   });
 
   it("lets a real transcription win over the tool's restated request for the same turn", async () => {
@@ -499,13 +528,18 @@ describe("OpenAIRealtimeVoiceAdapter transport boundary", () => {
     vi.useRealTimers();
   });
 
-  it("emits user and assistant transcripts separately when one full history update contains both", async () => {
+  it("takes user text from the authoritative transcription event and assistant text from history", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ value: "ek_test-only", model: "gpt-realtime-test", voice: "marin" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const adapter = new OpenAIRealtimeVoiceAdapter(handlers);
     const transcripts: Array<{ role: string; text: string; final: boolean }> = [];
     adapter.onTranscript((transcript) => transcripts.push(transcript));
     await adapter.connect();
 
+    sdk.sessions[0]!.emit("transport_event", {
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "user-1",
+      transcript: "Hiking and dinner.",
+    });
     sdk.sessions[0]!.emit("history_updated", [
       { itemId: "user-1", type: "message", role: "user", status: "completed", content: [{ type: "input_audio", transcript: "Hiking and dinner." }] },
       { itemId: "assistant-1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_audio", transcript: "I found one." }] },

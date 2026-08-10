@@ -3,6 +3,7 @@ import { apiError, noStoreJson } from "@/lib/api/responses";
 import { providerRoutesAllowed, takeRateLimit } from "@/lib/api/rate-limit";
 import { logApiDiagnostic, safeErrorMetadata } from "@/lib/api/diagnostics";
 import { openAIClientOptions, providerTimeoutMs } from "@/lib/api/provider-policy";
+import { DEFAULT_REALTIME_MODEL, DEFAULT_REALTIME_TRANSCRIPTION_MODEL, DEFAULT_REALTIME_VOICE } from "@/lib/realtime/config";
 
 export const runtime = "nodejs";
 
@@ -40,8 +41,9 @@ export async function POST(request: Request) {
   if (!requestOriginIsAllowed(origin, host)) return fail(403, "INVALID_ORIGIN", "Request origin is not allowed.");
   if (process.env.NEXT_PUBLIC_VOICE_MODE !== "live") return fail(409, "MOCK_MODE", "Live voice is disabled in this environment.");
   if (!process.env.OPENAI_API_KEY) return fail(503, "NOT_CONFIGURED", "Live voice is not configured.", true);
-  const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-mini";
-  const voice = process.env.OPENAI_REALTIME_VOICE ?? "marin";
+  const model = process.env.OPENAI_REALTIME_MODEL ?? DEFAULT_REALTIME_MODEL;
+  const transcriptionModel = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL;
+  const voice = process.env.OPENAI_REALTIME_VOICE ?? DEFAULT_REALTIME_VOICE;
   const providerStartedAt = Date.now();
   try {
     const client = new OpenAI(openAIClientOptions(process.env.OPENAI_API_KEY));
@@ -54,7 +56,7 @@ export async function POST(request: Request) {
         audio: {
           input: {
             noise_reduction: { type: "near_field" },
-            transcription: { model: "gpt-4o-mini-transcribe" },
+            transcription: { model: transcriptionModel },
             turn_detection: { type: "semantic_vad", eagerness: "auto", create_response: false, interrupt_response: false },
           },
           output: { voice },
@@ -64,7 +66,7 @@ export async function POST(request: Request) {
       },
     }, { signal: AbortSignal.timeout(providerTimeoutMs.realtimeToken) });
     logApiDiagnostic({ requestId, route: "/api/realtime/token", provider: "openai-realtime", model, outcome: "success", httpStatus: 200, durationMs: Date.now() - providerStartedAt, voiceAttemptId, sessionGeneration, voiceStage: "token", retryCount: 0, tokenRequest: "new" });
-    return noStoreJson({ requestId, value: secret.value, expiresAt: secret.expires_at, model, voice });
+    return noStoreJson({ requestId, value: secret.value, expiresAt: secret.expires_at, model, transcriptionModel, voice });
   } catch (error) {
     const metadata = safeErrorMetadata(error);
     logApiDiagnostic({ requestId, route: "/api/realtime/token", provider: "openai-realtime", model, outcome: "error", ...metadata, durationMs: Date.now() - providerStartedAt, errorCode: "TOKEN_PROVIDER_FAILED", voiceAttemptId, sessionGeneration, voiceStage: "token", retryCount: 0, tokenRequest: "new" });
