@@ -183,6 +183,25 @@ export class VoiceSessionCoordinator {
     if (this.active?.owner === owner) this.active.adapter.mute(muted);
   }
 
+  pauseForBackground(owner: VoiceOwner) {
+    const active = this.active;
+    if (!active || active.owner !== owner) return false;
+    active.adapter.mute(true);
+    this.record(active, "lifecycle", "started", { disconnectReason: "background" });
+    return true;
+  }
+
+  resumeFromBackground(owner: VoiceOwner) {
+    const active = this.active;
+    if (!active || active.owner !== owner) return false;
+    // Resuming the page must not reopen the microphone over an assistant
+    // response or application mutation. The turn controller will unmute when
+    // the lifecycle returns to listening.
+    active.adapter.mute(this.snapshot.status !== "listening");
+    this.record(active, "lifecycle", "success", { disconnectReason: "background-resume" });
+    return true;
+  }
+
   commitTurn(owner: VoiceOwner) {
     if (this.active?.owner !== owner || this.snapshot.status !== "listening") return false;
     this.active.adapter.commitTurn?.();

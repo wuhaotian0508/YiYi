@@ -252,4 +252,46 @@ describe("VoiceSessionCoordinator", () => {
 
     expect(coordinator.getSnapshot()).toMatchObject({ status: "listening", transcriptStatus: "failed" });
   });
+
+  it("pauses the microphone for backgrounding without invalidating the active generation", async () => {
+    const diagnostics: Array<{ result: string; disconnectReason?: string }> = [];
+    const adapter = new FakeVoiceAdapter();
+    const coordinator = new VoiceSessionCoordinator({ diagnostic: (entry) => diagnostics.push(entry) });
+    await coordinator.start("today", () => adapter);
+    adapter.emit("tool_running");
+    const generation = coordinator.getSnapshot().generation;
+
+    expect(coordinator.pauseForBackground("today")).toBe(true);
+    expect(adapter.muted).toBe(true);
+    expect(coordinator.isCurrent("today", generation)).toBe(true);
+    expect(adapter.disconnectCalls).toBe(0);
+
+    expect(coordinator.resumeFromBackground("today")).toBe(true);
+    // A tool-running turn remains muted until the turn controller reaches
+    // listening; resume must not reopen the mic over an in-flight mutation.
+    expect(adapter.muted).toBe(true);
+    expect(coordinator.isCurrent("today", generation)).toBe(true);
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ result: "started", disconnectReason: "background" }),
+      expect.objectContaining({ result: "success", disconnectReason: "background-resume" }),
+    ]));
+  });
+
+  it("keeps a resumed speaking turn muted until the user explicitly interrupts it", async () => {
+    const adapter = new FakeVoiceAdapter();
+    const coordinator = new VoiceSessionCoordinator();
+    await coordinator.start("today", () => adapter);
+    adapter.emit("speaking");
+    const generation = coordinator.getSnapshot().generation;
+
+    coordinator.pauseForBackground("today");
+    coordinator.resumeFromBackground("today");
+    expect(adapter.muted).toBe(true);
+    expect(coordinator.isCurrent("today", generation)).toBe(true);
+
+    expect(coordinator.interruptAndListen("today")).toBe(true);
+    expect(adapter.interruptCalls).toBe(1);
+    expect(coordinator.getSnapshot().status).toBe("listening");
+    expect(coordinator.isCurrent("today", generation)).toBe(true);
+  });
 });

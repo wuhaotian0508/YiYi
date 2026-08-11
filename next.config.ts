@@ -38,9 +38,9 @@ const securityHeaders = [
 ];
 
 const sharpRuntimeFiles = [
-  "node_modules/.pnpm/sharp@0.34.5/node_modules/sharp/**/*",
-  "node_modules/.pnpm/@img+sharp-linux-x64@0.34.5/node_modules/@img/sharp-linux-x64/**/*",
-  "node_modules/.pnpm/@img+sharp-libvips-linux-x64@1.2.4/node_modules/@img/sharp-libvips-linux-x64/**/*",
+  "node_modules/.pnpm/sharp@0.35.3/node_modules/sharp/**/*",
+  "node_modules/.pnpm/@img+sharp-linux-x64@0.35.3/node_modules/@img/sharp-linux-x64/**/*",
+  "node_modules/.pnpm/@img+sharp-libvips-linux-x64@1.3.2/node_modules/@img/sharp-libvips-linux-x64/**/*",
 ];
 
 const nextConfig: NextConfig = {

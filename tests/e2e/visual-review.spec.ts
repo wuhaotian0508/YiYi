@@ -113,6 +113,45 @@ test("keeps live listening feedback on the same Today center axis", async ({ pag
   await expect(page.locator(".voice-dock-listening-breath")).toBeVisible();
 });
 
+test("keeps the full outfit legible when the voice transport is paused", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("yiyi:test-auto-voice", "true");
+  });
+  await seedExplicitDemo(page);
+  await page.goto("/today");
+  await page.getByRole("button", { name: "Start live voice session" }).click();
+  await expect(page.getByText("I’d wear this one today.")).toBeVisible({ timeout: 8_000 });
+  await page.getByRole("button", { name: "Start live voice session" }).click();
+  await expect(page.getByText("YiYi is listening…")).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByText("Your outfit is still here.")).toBeVisible({ timeout: 7_000 });
+  await page.waitForTimeout(400);
+
+  for (const [width, height] of iPhoneSizes) {
+    await page.setViewportSize({ width, height });
+    const paused = page.locator(".paused-outfit");
+    const copy = page.locator(".paused-copy");
+    const [pausedBox, copyBox] = await Promise.all([paused.boundingBox(), copy.boundingBox()]);
+    expect(pausedBox).not.toBeNull();
+    expect(copyBox).not.toBeNull();
+    expect(pausedBox!.width).toBeGreaterThanOrEqual(Math.min(width - 40, 300));
+    expect(pausedBox!.y + pausedBox!.height).toBeLessThanOrEqual(copyBox!.y + 1);
+    await testInfo.attach(`today-paused-${width}x${height}`, {
+      body: await page.locator('section[aria-label="Today page"]').screenshot({ animations: "disabled" }),
+      contentType: "image/png",
+    });
+  }
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByText("I’d wear this one today.")).toBeVisible();
+});
+
 test("capture YiYi result review set", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "One rendering engine is sufficient for the manual visual contact sheet.");
   const output = resolve(process.cwd(), "tmp/visual");
@@ -162,6 +201,11 @@ test("capture YiYi result review set", async ({ page, browserName }) => {
   expect(confirmedActions).not.toBeNull();
   expect(confirmedDock).not.toBeNull();
   expect((confirmedActions?.y ?? 0) + (confirmedActions?.height ?? 0)).toBeLessThanOrEqual((confirmedDock?.y ?? 0) + 1);
+  await expect(page.locator('section[aria-label="Today page"]')).toHaveScreenshot("today-confirmed-390x844.png", {
+    animations: "disabled",
+    maxDiffPixelRatio: 0.008,
+    threshold: 0.22,
+  });
   await page.screenshot({ path: resolve(output, "390x844-today-confirmed.png"), fullPage: true });
 
 });

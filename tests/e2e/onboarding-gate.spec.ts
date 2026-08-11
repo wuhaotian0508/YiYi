@@ -37,6 +37,67 @@ test("clean devices cannot bypass onboarding through Today or wardrobe deep link
   await addDevice.close();
 });
 
+test("a clean user can complete the real onboarding flow and restore the same explicit demo setup", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Begin" }).click();
+  await page.getByRole("button", { name: "Skip" }).click();
+  await expect(page.getByRole("heading", { name: "YiYi is built around live voice." })).toBeVisible();
+  await page.getByRole("button", { name: "Allow Microphone" }).click();
+
+  await page.getByRole("button", { name: /No label/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Skip", exact: true }).click();
+  await page.getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Review my style" })).toBeVisible();
+  await page.getByRole("button", { name: "Review my style" }).click();
+  await expect(page.getByRole("heading", { name: "Your style so far" })).toBeVisible();
+  await page.getByRole("button", { name: "Looks right" }).click();
+  await page.getByRole("button", { name: "Try the example wardrobe" }).click();
+
+  await expect(page).toHaveURL(/\/today$/);
+  await expect(page.getByText("Ready for your day")).toBeVisible();
+  const completed = await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolveOpen, reject) => {
+      const request = indexedDB.open("yiyi");
+      request.onsuccess = () => resolveOpen(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const read = <T,>(storeName: string, key?: IDBValidKey) => new Promise<T>((resolveRead, reject) => {
+      const transaction = database.transaction(storeName, "readonly");
+      const request = key === undefined ? transaction.objectStore(storeName).count() : transaction.objectStore(storeName).get(key);
+      request.onsuccess = () => resolveRead(request.result as T);
+      request.onerror = () => reject(request.error);
+    });
+    const [wardrobeCount, onboardingState] = await Promise.all([
+      read<number>("wardrobeItems"),
+      read<{ value: string } | undefined>("appSettings", "onboardingState"),
+    ]);
+    database.close();
+    return { wardrobeCount, onboardingState: onboardingState?.value ? JSON.parse(onboardingState.value) : null };
+  });
+  expect(completed.wardrobeCount).toBeGreaterThan(0);
+  expect(completed.onboardingState).toMatchObject({ status: "complete", version: 1, experienceMode: "demo" });
+
+  await page.reload();
+  await expect(page).toHaveURL(/\/today$/);
+  await expect(page.getByText("Ready for your day")).toBeVisible();
+  const restoredWardrobeCount = await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolveOpen, reject) => {
+      const request = indexedDB.open("yiyi");
+      request.onsuccess = () => resolveOpen(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const count = await new Promise<number>((resolveCount, reject) => {
+      const request = database.transaction("wardrobeItems", "readonly").objectStore("wardrobeItems").count();
+      request.onsuccess = () => resolveCount(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return count;
+  });
+  expect(restoredWardrobeCount).toBe(completed.wardrobeCount);
+});
+
 test("completion is isolated per device and personal mode stays empty", async ({ browser }) => {
   const first = await browser.newContext();
   const second = await browser.newContext();

@@ -37,6 +37,11 @@ import { configuredWeatherMode, fetchConfiguredWeather, getStoredWeatherState, r
 
 type Phase = "idle" | "connecting" | "listening" | "understanding" | "generating" | "presenting" | "revising" | "paused" | "confirmed" | "error";
 type IntentTag = { id: string; kind: "activity" | "aesthetic" | "excluded"; index: number; label: string };
+const BACKGROUND_TRANSPORT_GRACE_MS = 5_000;
+
+function protectsCommittedTurn(status: VoiceLifecycleStatus) {
+  return ["committing", "understanding", "tool_running", "revising"].includes(status);
+}
 
 function localDateKey() {
   const date = new Date();
@@ -118,6 +123,10 @@ function TodayPage() {
   const versionIdRef = useRef<string | null>(null);
   const inactivityTimerRef = useRef<number | null>(null);
   const lifetimeTimerRef = useRef<number | null>(null);
+  const backgroundTimerRef = useRef<number | null>(null);
+  const pageHiddenRef = useRef(false);
+  const backgroundStopRequestedRef = useRef(false);
+  const backgroundOperationSettledRef = useRef(false);
   const currentRef = useRef(current);
   const wardrobeRef = useRef(wardrobe);
   const intentRef = useRef(intent);
@@ -208,15 +217,29 @@ function TodayPage() {
       }
     })();
 
-    const onVisibility = () => {
-      if (!document.hidden || voiceSessionCoordinator.getSnapshot().owner !== "today") return;
-      const hadOutfit = Boolean(currentRef.current);
-      void disconnectVoice(hadOutfit ? "paused" : "idle");
-    };
+    const releaseOperationIdle = operationController.onIdle(() => {
+      if (pageHiddenRef.current) backgroundOperationSettledRef.current = true;
+      if (!pageHiddenRef.current || !backgroundStopRequestedRef.current) return;
+      // Tool handlers resolve through a microtask. Deferring transport cleanup
+      // one task lets the SDK put the verified function output on the data
+      // channel first; the application mutation is already persisted here.
+      window.setTimeout(() => {
+        if (pageHiddenRef.current && backgroundStopRequestedRef.current) void stopBackgroundTransport();
+      }, 0);
+    });
+    const onVisibility = () => document.hidden ? enterBackground() : leaveBackground();
+    const onPageHide = () => enterBackground();
+    const onPageShow = () => leaveBackground();
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("pageshow", onPageShow);
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("pageshow", onPageShow);
+      releaseOperationIdle();
+      clearBackgroundTimer();
       operationController.cancel();
       clearSessionTimers();
       void voiceSessionCoordinator.stop("today", "cleanup");
@@ -234,8 +257,11 @@ function TodayPage() {
     if (voiceSnapshot.status === "tool_running") setPhase((value) => currentRef.current ? value : "generating");
     if (voiceSnapshot.status === "revising") setPhase("revising");
     if (voiceSnapshot.status === "recoverable_error" || voiceSnapshot.status === "rate_limited") {
-      operationControllerRef.current.cancel();
-      setPhase(currentRef.current ? "paused" : "error");
+      const preserveInFlightBackgroundWork = pageHiddenRef.current && operationControllerRef.current.isBusy();
+      if (!preserveInFlightBackgroundWork) {
+        operationControllerRef.current.cancel();
+        setPhase(currentRef.current ? "paused" : "error");
+      }
     }
   // The coordinator snapshot is the only connection-state input; timer helpers use refs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -259,9 +285,9 @@ function TodayPage() {
         wardrobeAnchors: [],
       }));
       const nextIntent = buildDailyIntentFromVoiceRequest(request, wardrobeRef.current);
-      void runRecommendation(nextIntent, nextTranscript.text);
+      await runRecommendation(nextIntent, nextTranscript.text);
+      await voiceSessionCoordinator.stop("today", "user");
     })();
-    void voiceSessionCoordinator.stop("today", "user");
   // runRecommendation reads current refs and is intentionally triggered only by a new final browser transcript.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceSnapshot.generation, voiceSnapshot.latestUserTranscript, voiceSnapshot.owner]);
@@ -280,15 +306,58 @@ function TodayPage() {
     lifetimeTimerRef.current = null;
   }
 
-  function resetInactivityTimer() {
-    if (inactivityTimerRef.current) window.clearTimeout(inactivityTimerRef.current);
-    inactivityTimerRef.current = window.setTimeout(() => void disconnectVoice(currentRef.current ? "paused" : "idle"), 90_000);
+  function clearBackgroundTimer() {
+    if (backgroundTimerRef.current) window.clearTimeout(backgroundTimerRef.current);
+    backgroundTimerRef.current = null;
   }
 
-  async function disconnectVoice(nextPhase?: Phase) {
+  function enterBackground() {
+    if (pageHiddenRef.current) return;
+    pageHiddenRef.current = true;
+    backgroundOperationSettledRef.current = false;
+    const connection = voiceSessionCoordinator.getSnapshot();
+    if (connection.owner !== "today") return;
+    voiceSessionCoordinator.pauseForBackground("today");
+    clearBackgroundTimer();
+    backgroundTimerRef.current = window.setTimeout(() => {
+      backgroundTimerRef.current = null;
+      if (!pageHiddenRef.current) return;
+      backgroundStopRequestedRef.current = true;
+      if (operationControllerRef.current.isBusy()) return;
+      if (protectsCommittedTurn(voiceSessionCoordinator.getSnapshot().status) && !backgroundOperationSettledRef.current) return;
+      void stopBackgroundTransport();
+    }, BACKGROUND_TRANSPORT_GRACE_MS);
+  }
+
+  function leaveBackground() {
+    pageHiddenRef.current = false;
+    backgroundStopRequestedRef.current = false;
+    backgroundOperationSettledRef.current = false;
+    clearBackgroundTimer();
+    voiceSessionCoordinator.resumeFromBackground("today");
+    if (currentRef.current) setPhase((value) => value === "confirmed" ? value : "presenting");
+  }
+
+  async function stopBackgroundTransport() {
+    if (!pageHiddenRef.current) return;
+    backgroundStopRequestedRef.current = false;
     clearSessionTimers();
+    await voiceSessionCoordinator.stop("today", "background");
+    if (pageHiddenRef.current) setPhase(currentRef.current ? "paused" : "idle");
+    else if (currentRef.current) setPhase("presenting");
+  }
+
+  function resetInactivityTimer() {
+    if (inactivityTimerRef.current) window.clearTimeout(inactivityTimerRef.current);
+    inactivityTimerRef.current = window.setTimeout(() => void disconnectVoice(currentRef.current ? "paused" : "idle", "timeout"), 90_000);
+  }
+
+  async function disconnectVoice(nextPhase?: Phase, reason: "user" | "timeout" = "user") {
+    clearSessionTimers();
+    clearBackgroundTimer();
+    backgroundStopRequestedRef.current = false;
     operationControllerRef.current.cancel();
-    await voiceSessionCoordinator.stop("today", nextPhase === "paused" ? "background" : "user");
+    await voiceSessionCoordinator.stop("today", reason);
     if (nextPhase) setPhase(nextPhase);
   }
 
@@ -349,11 +418,9 @@ function TodayPage() {
         outfitVersion: token.baseVersionId,
       });
       if (!operationControllerRef.current.isCurrent(token)) return { success: false as const, summary: "A newer outfit operation replaced this one." };
-      if (input.voiceGeneration !== undefined && !voiceSessionCoordinator.isCurrent("today", input.voiceGeneration)) {
-        operationControllerRef.current.finish(token);
-        setPhase(currentRef.current ? "presenting" : "idle");
-        return { success: false as const, summary: "That voice session has already ended." };
-      }
+      // The voice generation authorizes the transaction at its boundary above.
+      // Once ranking starts, the application operation token owns completion;
+      // a background transport loss must not revoke a valid persisted request.
       assertDisplayedOutfitLegal(ranked.outfit, decision.context);
       operationControllerRef.current.enterCommit(token);
       failureStage = "persistence";
@@ -437,6 +504,7 @@ function TodayPage() {
   const randomizeOutfit = () => executeDecision({ operation: "random_new_outfit", delta: randomDelta(), utterance: "Choose a different outfit for the same day." });
 
   async function undo(voiceGeneration?: number) {
+    if (voiceGeneration !== undefined && !voiceSessionCoordinator.isCurrent("today", voiceGeneration)) return false;
     const baseVersionId = versionIdRef.current;
     const sessionId = sessionIdRef.current;
     if (!baseVersionId || !sessionId) return false;
@@ -444,10 +512,6 @@ function TodayPage() {
     try { token = operationControllerRef.current.begin(baseVersionId); } catch { return false; }
     try {
       const [items, profile] = await Promise.all([getWardrobeItemsForCurrentMode(), db.preferenceProfiles.get("default")]);
-      if (voiceGeneration !== undefined && !voiceSessionCoordinator.isCurrent("today", voiceGeneration)) {
-        operationControllerRef.current.finish(token);
-        return false;
-      }
       const result = await runCommitPhase(operationControllerRef.current, token, () => undoOutfitMutation({ sessionId, baseVersionId, expectedGeneration: operationGenerationRef.current, wardrobe: items, profile: profile ?? createNeutralPreferenceProfile(), weather: weatherRef.current }));
       if (!result || !operationControllerRef.current.isCurrent(token)) { operationControllerRef.current.finish(token); return false; }
       versionIdRef.current = result.versionId;
@@ -466,6 +530,7 @@ function TodayPage() {
   }
 
   async function confirmCurrent(voiceGeneration?: number) {
+    if (voiceGeneration !== undefined && !voiceSessionCoordinator.isCurrent("today", voiceGeneration)) return { success: false as const, summary: "That voice session has already ended." };
     const outfit = currentRef.current;
     const baseVersionId = versionIdRef.current;
     const sessionId = sessionIdRef.current;
@@ -479,10 +544,6 @@ function TodayPage() {
       const context = createRecommendationContext({ wardrobe: items, intent: intentRef.current, profile, weather: weatherRef.current, currentOutfit: outfit, operation: "initial" });
       assertDisplayedOutfitLegal(outfit, context);
       const updatedProfile = updateProfileFromOutfitFeedback({ profile, outfit, wardrobe: items, kind: "confirmed", intent: intentRef.current, contextId: sessionId });
-      if (voiceGeneration !== undefined && !voiceSessionCoordinator.isCurrent("today", voiceGeneration)) {
-        operationControllerRef.current.finish(token);
-        return { success: false as const, summary: "That voice session has already ended." };
-      }
       const session = await runCommitPhase(operationControllerRef.current, token, () => confirmOutfitMutation({ sessionId, baseVersionId, expectedGeneration: operationGenerationRef.current, outfit, updatedProfile }));
       operationGenerationRef.current = session.operationGeneration;
       setPhase("confirmed");
@@ -560,7 +621,6 @@ function TodayPage() {
         if (!currentVoice()) return staleVoice();
         try {
           const updated = await persistPreferenceDelta(input, "explicit_voice");
-          if (!currentVoice()) return staleVoice();
           const saved = updated.preferenceSignals?.find((signal) => signal.id === input.signalId)
             ?? updated.preferenceSignals?.find((signal) => signal.label === input.label && signal.status !== "deleted");
           return saved?.status === "needs_review"
@@ -581,7 +641,7 @@ function TodayPage() {
     playSound("listen");
     if (!resumeExisting) setPhase("connecting");
     const autoMock = typeof window !== "undefined" && localStorage.getItem("yiyi:test-auto-voice") === "true";
-    lifetimeTimerRef.current = window.setTimeout(() => void disconnectVoice(currentRef.current ? "paused" : "idle"), 300_000);
+    lifetimeTimerRef.current = window.setTimeout(() => void disconnectVoice(currentRef.current ? "paused" : "idle", "timeout"), 300_000);
     resetInactivityTimer();
     try {
       await voiceSessionCoordinator.start("today", ({ attemptId, generation }) => process.env.NEXT_PUBLIC_VOICE_MODE === "live"
@@ -648,14 +708,16 @@ function TodayPage() {
         </header>
         <AnimatePresence>{weatherOpen && weather && <WeatherPanel weather={weather} source={weatherSource} onClose={() => setWeatherOpen(false)} />}</AnimatePresence>
         <div className="today-stage">
-          <AnimatePresence initial={false} mode="popLayout">
-            {phase === "idle" && <Idle key="idle" hydrated={hydrated} recoveryMessage={recoveryMessage} />}
-            {["connecting", "listening", "understanding", "generating"].includes(phase) && <Listening key="listening" phase={phase} transcript={transcript} tags={tags} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }} isMock={isMock} onUseDemo={() => voiceSessionCoordinator.submitDemoTurn("today")} />}
-            {(phase === "presenting" || phase === "revising") && current && <Result key="result" current={current} wardrobe={wardrobe} reason={reason} phase={phase} tags={tags} transcript={resultTranscript} liveTranscript={voiceSnapshot.latestUserTranscript?.final === false ? transcript : ""} focusedSlot={focusedSlot} onFocus={setFocusedSlot} onOpenDetails={() => setDetailsOpen(true)} onRevise={revise} onUndo={() => void undo()} canUndo={history.length > 0} onRandom={() => void randomizeOutfit()} onConfirm={() => void confirmCurrent()} />}
-            {phase === "paused" && <Paused key="paused" current={current} wardrobe={wardrobe} hasDetails={Boolean(transcript || resultTranscript || tags.length)} onOpenDetails={() => setDetailsOpen(true)} />}
-            {phase === "confirmed" && current && <Confirmed key="confirmed" current={current} wardrobe={wardrobe} onRevise={() => setPhase("presenting")} onOpenWardrobe={() => pagerRef.current?.slideTo(1)} />}
-            {phase === "error" && <ErrorState key="error" hasDetails={Boolean(transcript || resultTranscript || tags.length)} onOpenDetails={() => setDetailsOpen(true)} />}
-          </AnimatePresence>
+          <LayoutGroup id="today-current-outfit">
+            <AnimatePresence initial={false} mode="popLayout">
+              {phase === "idle" && <Idle key="idle" hydrated={hydrated} recoveryMessage={recoveryMessage} />}
+              {["connecting", "listening", "understanding", "generating"].includes(phase) && <Listening key="listening" phase={phase} transcript={transcript} tags={tags} onEditTag={(tag) => { setEditingTag(tag); setTagDraft(tag.label); }} isMock={isMock} onUseDemo={() => voiceSessionCoordinator.submitDemoTurn("today")} />}
+              {(phase === "presenting" || phase === "revising") && current && <Result key="result" current={current} wardrobe={wardrobe} reason={reason} phase={phase} tags={tags} transcript={resultTranscript} liveTranscript={voiceSnapshot.latestUserTranscript?.final === false ? transcript : ""} focusedSlot={focusedSlot} onFocus={setFocusedSlot} onOpenDetails={() => setDetailsOpen(true)} onRevise={revise} onUndo={() => void undo()} canUndo={history.length > 0} onRandom={() => void randomizeOutfit()} onConfirm={() => void confirmCurrent()} />}
+              {phase === "paused" && <Paused key="paused" current={current} wardrobe={wardrobe} hasDetails={Boolean(transcript || resultTranscript || tags.length)} onOpenDetails={() => setDetailsOpen(true)} />}
+              {phase === "confirmed" && current && <Confirmed key="confirmed" current={current} wardrobe={wardrobe} onRevise={() => setPhase("presenting")} onOpenWardrobe={() => pagerRef.current?.slideTo(1)} />}
+              {phase === "error" && <ErrorState key="error" hasDetails={Boolean(transcript || resultTranscript || tags.length)} onOpenDetails={() => setDetailsOpen(true)} />}
+            </AnimatePresence>
+          </LayoutGroup>
         </div>
         <VoiceDock
           state={visualState}
@@ -724,15 +786,15 @@ type ResultProps = { current: Outfit; wardrobe: WardrobeItem[]; reason: string; 
 function Result({ current, wardrobe, reason, phase, tags, transcript, liveTranscript, focusedSlot, onFocus, onOpenDetails, onRevise, onUndo, canUndo, onRandom, onConfirm }: ResultProps) {
   const reduceMotion = useReducedMotionConfig();
   const mutationLocked = phase === "revising";
-  return <MotionSection className="today-content result-section"><header className="result-heading"><p className="eyebrow">Today’s answer</p><h1>{copy.outfit.main}</h1><div className="result-supporting-copy"><AnimatePresence initial={false} mode="wait">{liveTranscript ? <motion.p key="live" role="status" aria-label="Live voice feedback" className="result-live-feedback" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? .1 : .18 }}><span>Listening</span> “{liveTranscript}”</motion.p> : <motion.p key={reason} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? .1 : .18 }}>{reason}</motion.p>}</AnimatePresence></div></header><div className="single-outfit-stage"><AnimatePresence initial={false}>{phase === "revising" && <motion.div className="revision-bubble" initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(5px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={{ opacity: 0 }} transition={{ duration: .18 }}>Keeping every unmentioned piece still.</motion.div>}</AnimatePresence><OutfitCanvas outfit={current} wardrobe={wardrobe} onSelect={mutationLocked ? undefined : onFocus} emphasizedSlot={phase === "revising" ? focusedSlot : null} /></div><AnimatePresence initial={false} mode="popLayout">{focusedSlot && <motion.div className="focused-item" key={focusedSlot} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(6px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={{ opacity: 0 }} transition={{ duration: .18 }}><span>Revise this {focusedSlot === "extraAccessory" ? "accessory" : focusedSlot}</span><SecondaryButton disabled={mutationLocked} onClick={() => onRevise(focusedSlot)}>Replace</SecondaryButton></motion.div>}</AnimatePresence><div className="result-actions"><div className="result-command-row">{(transcript || tags.length > 0) && <button className="result-details-trigger" type="button" aria-label="Open today details" onClick={onOpenDetails}>Details <span aria-hidden="true">›</span></button>}{canUndo && <button disabled={mutationLocked} onClick={onUndo}><Undo2 size={16} />Undo</button>}<button disabled={mutationLocked} onClick={onRandom}><Shuffle size={16} />Another</button></div><PrimaryButton className="wear-button" disabled={mutationLocked} onClick={onConfirm}><Check size={17} />{copy.outfit.wear}</PrimaryButton></div><div className="dock-spacer compact" /></MotionSection>;
+  return <MotionSection className="today-content result-section"><header className="result-heading"><p className="eyebrow">Today’s answer</p><h1>{copy.outfit.main}</h1><div className="result-supporting-copy"><AnimatePresence initial={false} mode="wait">{liveTranscript ? <motion.p key="live" role="status" aria-label="Live voice feedback" className="result-live-feedback" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? .1 : .18 }}><span>Listening</span> “{liveTranscript}”</motion.p> : <motion.p key={reason} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduceMotion ? .1 : .18 }}>{reason}</motion.p>}</AnimatePresence></div></header><div className="single-outfit-stage"><AnimatePresence initial={false}>{phase === "revising" && <motion.div className="revision-bubble" initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(5px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={{ opacity: 0 }} transition={{ duration: .18 }}>Keeping every unmentioned piece still.</motion.div>}</AnimatePresence><OutfitCanvas outfit={current} wardrobe={wardrobe} onSelect={mutationLocked ? undefined : onFocus} emphasizedSlot={phase === "revising" ? focusedSlot : null} layoutScope="today-outfit" /></div><AnimatePresence initial={false} mode="popLayout">{focusedSlot && <motion.div className="focused-item" key={focusedSlot} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(6px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={{ opacity: 0 }} transition={{ duration: .18 }}><span>Revise this {focusedSlot === "extraAccessory" ? "accessory" : focusedSlot}</span><SecondaryButton disabled={mutationLocked} onClick={() => onRevise(focusedSlot)}>Replace</SecondaryButton></motion.div>}</AnimatePresence><div className="result-actions"><div className="result-command-row">{(transcript || tags.length > 0) && <button className="result-details-trigger" type="button" aria-label="Open today details" onClick={onOpenDetails}>Details <span aria-hidden="true">›</span></button>}{canUndo && <button disabled={mutationLocked} onClick={onUndo}><Undo2 size={16} />Undo</button>}<button disabled={mutationLocked} onClick={onRandom}><Shuffle size={16} />Another</button></div><PrimaryButton className="wear-button" disabled={mutationLocked} onClick={onConfirm}><Check size={17} />{copy.outfit.wear}</PrimaryButton></div><div className="dock-spacer compact" /></MotionSection>;
 }
 
 function Paused({ current, wardrobe, hasDetails, onOpenDetails }: { current: Outfit | null; wardrobe: WardrobeItem[]; hasDetails: boolean; onOpenDetails: () => void }) {
-  return <MotionSection className="today-content paused-state"><div>{current ? <div className="paused-outfit"><OutfitCanvas outfit={current} wardrobe={wardrobe} /></div> : <VoiceCore state="idle" label="YiYi voice paused" />}<h1>Session paused.</h1><p>Your outfit and understanding are still here. Tap the Voice Dock to reconnect.</p>{hasDetails && <button className="result-details-trigger" type="button" onClick={onOpenDetails}>Today details <span aria-hidden="true">›</span></button>}</div><div className="dock-spacer" /></MotionSection>;
+  return <MotionSection className="today-content paused-state"><div>{current ? <div className="paused-outfit"><OutfitCanvas outfit={current} wardrobe={wardrobe} layoutScope="today-outfit" /></div> : <VoiceCore state="idle" label="YiYi voice paused" />}<div className="paused-copy"><p className="eyebrow">Voice paused</p><h1>Your outfit is still here.</h1><p>Tap the Voice Dock when you’re ready to continue.</p>{hasDetails && <button className="result-details-trigger" type="button" onClick={onOpenDetails}>Today details <span aria-hidden="true">›</span></button>}</div></div><div className="dock-spacer" /></MotionSection>;
 }
 
 function Confirmed({ current, wardrobe, onRevise, onOpenWardrobe }: { current: Outfit; wardrobe: WardrobeItem[]; onRevise: () => void; onOpenWardrobe: () => void }) {
-  return <MotionSection className="today-content confirmed-state"><YiYiMarkWithAccent /><h1>{copy.outfit.confirmedTitle}</h1><p>{copy.outfit.confirmedBody}</p><div className="confirmed-outfit"><OutfitCanvas outfit={current} wardrobe={wardrobe} /></div><div className="confirmed-actions"><PrimaryButton onClick={onRevise}>See today’s outfit</PrimaryButton><button type="button" onClick={onOpenWardrobe} className="secondary-button">Open wardrobe</button></div><div className="dock-spacer compact" /></MotionSection>;
+  return <MotionSection className="today-content confirmed-state"><YiYiMarkWithAccent /><h1>{copy.outfit.confirmedTitle}</h1><p>{copy.outfit.confirmedBody}</p><div className="confirmed-outfit"><OutfitCanvas outfit={current} wardrobe={wardrobe} layoutScope="today-outfit" /></div><div className="confirmed-actions"><PrimaryButton onClick={onRevise}>See today’s outfit</PrimaryButton><button type="button" onClick={onOpenWardrobe} className="secondary-button">Open wardrobe</button></div><div className="dock-spacer compact" /></MotionSection>;
 }
 
 function YiYiMarkWithAccent() { return <div className="confirmed-mark"><VoiceCore state="idle" label="Outfit decided" /><span /><span /></div>; }

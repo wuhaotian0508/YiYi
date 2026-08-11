@@ -5,7 +5,7 @@ export class ImageRuntimeUnavailableError extends Error {
   }
 }
 
-type SharpFactory = typeof import("sharp");
+type SharpFactory = typeof import("sharp")["default"];
 
 let sharpPromise: Promise<SharpFactory> | null = null;
 

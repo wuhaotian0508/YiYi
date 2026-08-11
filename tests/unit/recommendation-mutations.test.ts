@@ -52,6 +52,23 @@ describe("recommendation operation and persistence ordering", () => {
     expect(controller.isBusy()).toBe(false);
   });
 
+  it("notifies lifecycle owners only after an in-flight operation is fully released", () => {
+    const controller = new RecommendationOperationController();
+    const onIdle = vi.fn();
+    const unsubscribe = controller.onIdle(onIdle);
+    const token = controller.begin(null);
+    controller.enterCommit(token);
+    controller.enterPublish(token);
+    expect(onIdle).not.toHaveBeenCalled();
+
+    controller.finish(token);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    const next = controller.begin(null);
+    controller.finish(next);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
   it("updates availability atomically and returns the same persisted wardrobe snapshot", async () => {
     await db.wardrobeItems.bulkPut(demoWardrobe);
     const itemId = demoWardrobe[0]!.id;

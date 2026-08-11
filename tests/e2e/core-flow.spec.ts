@@ -71,11 +71,27 @@ test("continuous voice recommendation, targeted revision, and confirmation", asy
   expect(afterUndo.current?.id).toBe(beforeRandom.current?.id);
   const bag = page.locator('button[data-slot="bag"]');
   const stableShoes = await page.locator('button[data-slot="shoes"]').getAttribute("aria-label");
+  const stableComposition = await Promise.all(["top", "bottom", "shoes"].map(async (slot) => ({
+    slot,
+    box: await page.locator(`button[data-slot="${slot}"]`).boundingBox(),
+  })));
   const firstBag = await bag.getAttribute("aria-label");
   await bag.click();
   await page.getByRole("button", { name: "Replace" }).click();
   await expect(page.locator('button[data-slot="shoes"]')).toHaveAttribute("aria-label", stableShoes!);
   await expect(bag).not.toHaveAttribute("aria-label", firstBag!, { timeout: 8_000 });
+  await page.waitForTimeout(400);
+  for (const stable of stableComposition) {
+    const next = await page.locator(`button[data-slot="${stable.slot}"]`).boundingBox();
+    expect(next).not.toBeNull();
+    expect(stable.box).not.toBeNull();
+    expect(Math.abs(next!.x - stable.box!.x), `${stable.slot} x continuity`).toBeLessThanOrEqual(1);
+    // The result copy and Undo affordance can change the stage height by a few
+    // pixels; unchanged garments must remain optically anchored, not frozen to
+    // an impossible document coordinate.
+    expect(Math.abs(next!.y - stable.box!.y), `${stable.slot} y continuity`).toBeLessThanOrEqual(6);
+  }
+  expect(await page.locator(".today-wardrobe-pager").evaluate((element) => element.scrollLeft)).toBe(0);
   await page.reload();
   await expect(page.getByText("I’d wear this one today.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
@@ -86,6 +102,88 @@ test("continuous voice recommendation, targeted revision, and confirmation", asy
   await expect(page.getByRole("button", { name: "Start live voice session" })).toBeVisible();
   await page.reload();
   await expect(page.getByText("Outfit decided.")).toBeVisible();
+});
+
+test("an in-flight recommendation survives backgrounding beyond the transport grace window", async ({ page }) => {
+  let markRankStarted!: () => void;
+  let releaseRank!: () => void;
+  const rankStarted = new Promise<void>((resolveStarted) => { markRankStarted = resolveStarted; });
+  const rankRelease = new Promise<void>((resolveRelease) => { releaseRank = resolveRelease; });
+  await page.route("**/api/outfits/rank", async (route) => {
+    markRankStarted();
+    await rankRelease;
+    await route.continue();
+  });
+
+  await page.goto("/today");
+  await page.getByRole("button", { name: "Start live voice session" }).click();
+  await rankStarted;
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  // Cross the normal background transport grace while ranking is deliberately
+  // unresolved. The application transaction must retain ownership.
+  await page.waitForTimeout(5_200);
+  await expect(page.getByText("Session paused.")).toHaveCount(0);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  releaseRank();
+
+  await expect(page.getByText("I’d wear this one today.")).toBeVisible({ timeout: 8_000 });
+  const state = await inspectRecommendationState(page);
+  expect(state.session?.currentVersionId).toBe(state.current?.id);
+  expect(state.current?.outfit.itemIds).toMatchObject({
+    top: expect.any(String),
+    bottom: expect.any(String),
+    shoes: expect.any(String),
+  });
+});
+
+test("an in-flight targeted revision survives backgrounding and rapid resume events", async ({ page }) => {
+  await page.goto("/today");
+  await page.getByRole("button", { name: "Start live voice session" }).click();
+  await expect(page.getByText("I’d wear this one today.")).toBeVisible({ timeout: 8_000 });
+
+  let markRankStarted!: () => void;
+  let releaseRank!: () => void;
+  let rankRequests = 0;
+  const rankStarted = new Promise<void>((resolveStarted) => { markRankStarted = resolveStarted; });
+  const rankRelease = new Promise<void>((resolveRelease) => { releaseRank = resolveRelease; });
+  await page.route("**/api/outfits/rank", async (route) => {
+    rankRequests += 1;
+    markRankStarted();
+    await rankRelease;
+    await route.continue();
+  });
+
+  const bag = page.locator('button[data-slot="bag"]');
+  const originalBag = await bag.getAttribute("aria-label");
+  await bag.click();
+  await page.getByRole("button", { name: "Replace" }).click();
+  await rankStarted;
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForTimeout(5_200);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  releaseRank();
+
+  await expect(bag).not.toHaveAttribute("aria-label", originalBag!, { timeout: 8_000 });
+  expect(rankRequests).toBe(1);
+  const state = await inspectRecommendationState(page);
+  expect(state.session?.currentVersionId).toBe(state.current?.id);
+  expect(state.current?.parentVersionId).not.toBeNull();
 });
 
 test("rapid repeated mutations leave one coherent persisted winner", async ({ page }) => {

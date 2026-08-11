@@ -31,7 +31,7 @@ const cleanDemoAssetById: Partial<Record<string, string>> = {
   "44444444-4444-4444-8444-444444444441": "/demo-wardrobe/white-sneakers-clean.webp",
 };
 
-export function Garment({ item, className = "" }: { item: WardrobeItem; className?: string }) {
+export function Garment({ item, className = "", eager = false }: { item: WardrobeItem; className?: string; eager?: boolean }) {
   const imageSet = useLiveQuery(() => getItemImageSet(item.id), [item.id]);
   const [localSource, setLocalSource] = useState<string | null>(null);
   useEffect(() => {
@@ -40,9 +40,9 @@ export function Garment({ item, className = "" }: { item: WardrobeItem; classNam
     const frame = window.requestAnimationFrame(() => setLocalSource(source));
     return () => { window.cancelAnimationFrame(frame); URL.revokeObjectURL(source); };
   }, [imageSet]);
-  if (localSource) return <span aria-hidden="true" className={`garment-local ${className}`}><Image unoptimized alt="" src={localSource} fill sizes="126px" /></span>;
+  if (localSource) return <span aria-hidden="true" className={`garment-local ${className}`}><Image unoptimized alt="" src={localSource} fill sizes="126px" loading={eager ? "eager" : "lazy"} /></span>;
   const cleanDemoAsset = cleanDemoAssetById[item.id];
-  if (cleanDemoAsset) return <span aria-hidden="true" className={`garment-demo-asset ${className}`}><Image alt="" src={cleanDemoAsset} fill sizes="126px" /></span>;
+  if (cleanDemoAsset) return <span aria-hidden="true" className={`garment-demo-asset ${className}`}><Image alt="" src={cleanDemoAsset} fill sizes="126px" loading={eager ? "eager" : "lazy"} /></span>;
   const spriteIndex = spriteIndexById[item.id];
   const shapeCategory = ["top", "outerwear", "bottom", "shoes", "bag", "jewelry", "headwear", "eyewear", "one_piece"].includes(item.category) ? item.category : "jewelry";
   if (spriteIndex !== undefined) {

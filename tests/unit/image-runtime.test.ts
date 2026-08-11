@@ -5,10 +5,10 @@ import { shouldRetryWardrobeProcessing } from "@/lib/wardrobe/process-client";
 
 describe("image runtime and upload retry policy", () => {
   it("executes a real in-memory WebP conversion through the server Sharp runtime", async () => {
-    await expect(sharpRuntimeSmoke()).resolves.toMatchObject({ format: "webp", width: 2, height: 2, sharp: "0.34.5" });
+    await expect(sharpRuntimeSmoke()).resolves.toMatchObject({ format: "webp", width: 2, height: 2, sharp: "0.35.3" });
     const response = await imageHealth();
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ready: true, runtime: { format: "webp", width: 2, height: 2, sharp: "0.34.5" } });
+    expect(await response.json()).toMatchObject({ ready: true, runtime: { format: "webp", width: 2, height: 2, sharp: "0.35.3" } });
   });
 
   it("retries only the explicitly transient Photoroom boundary", () => {

@@ -5,7 +5,7 @@ import { OutfitCanvas } from "@/components/outfit/outfit-canvas";
 import { OutfitSchema } from "@/domain/schemas";
 import { demoWardrobe } from "@/mocks/wardrobe";
 
-vi.mock("@/components/wardrobe/garment", () => ({ Garment: ({ item }: { item: { id: string } }) => <span data-profile-garment={item.id} /> }));
+vi.mock("@/components/wardrobe/garment", () => ({ Garment: ({ item, eager }: { item: { id: string }; eager?: boolean }) => <span data-profile-garment={item.id} data-profile-eager={eager ? "true" : "false"} /> }));
 vi.mock("motion/react", async (importOriginal) => ({
   ...await importOriginal<typeof import("motion/react")>(),
   useReducedMotionConfig: () => true,
@@ -31,6 +31,13 @@ describe("OutfitCanvas React profile", () => {
     const view = render(<OutfitCanvas outfit={outfit} wardrobe={demoWardrobe} emphasizedSlot="shoes" />);
     expect(view.container.querySelector('[data-slot="shoes"]')).toHaveAttribute("data-emphasized", "true");
     expect(view.container.querySelector('[data-slot="top"]')).not.toHaveAttribute("data-emphasized");
+  });
+
+  it("loads the visible recommendation garments without lazy-loading the LCP candidate", () => {
+    const outfit = OutfitSchema.parse({ id: crypto.randomUUID(), itemIds: { top: demoWardrobe[2].id, bottom: demoWardrobe[5].id, shoes: demoWardrobe[8].id }, deterministicScore: 80 });
+    const view = render(<OutfitCanvas outfit={outfit} wardrobe={demoWardrobe} />);
+    expect([...view.container.querySelectorAll("[data-profile-garment]")]).toHaveLength(3);
+    expect([...view.container.querySelectorAll('[data-profile-eager="true"]')]).toHaveLength(3);
   });
 
   it("commits a targeted replacement as one bounded update", () => {

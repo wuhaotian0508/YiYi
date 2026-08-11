@@ -8,6 +8,7 @@ export type OperationToken = {
 export class RecommendationOperationController {
   private currentId = 0;
   private active: OperationToken | null = null;
+  private readonly idleListeners = new Set<() => void>();
 
   begin(baseVersionId: string | null) {
     if (this.active) throw new Error("OUTFIT_OPERATION_IN_PROGRESS");
@@ -34,14 +35,22 @@ export class RecommendationOperationController {
     return this.active?.id === token.id && !token.abortController.signal.aborted;
   }
 
+  onIdle(listener: () => void) {
+    this.idleListeners.add(listener);
+    return () => this.idleListeners.delete(listener);
+  }
+
   finish(token: OperationToken) {
-    if (this.active?.id === token.id) this.active = null;
+    if (this.active?.id !== token.id) return;
+    this.active = null;
+    this.idleListeners.forEach((listener) => listener());
   }
 
   cancel() {
     if (this.active?.phase !== "preparing") return false;
     this.active?.abortController.abort();
     this.active = null;
+    this.idleListeners.forEach((listener) => listener());
     return true;
   }
 }
