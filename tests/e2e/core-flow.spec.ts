@@ -296,6 +296,7 @@ test("wardrobe search, availability, and visible preference editing work", async
 
 test("mock image processing saves and reloads Blob-backed clothing", async ({ page }) => {
   await page.goto("/wardrobe/add");
+  await expect(page.getByRole("button", { name: "Import purchases from Shopify" })).toBeVisible();
   const fixture = resolve(process.cwd(), "tests/fixtures/soft-jacket.webp");
   await page.locator('input[type="file"]').nth(1).setInputFiles(fixture);
   await expect(page.getByText("Review item")).toBeVisible({ timeout: 10_000 });

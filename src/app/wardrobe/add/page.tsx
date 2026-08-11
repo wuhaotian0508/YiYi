@@ -4,10 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Camera, Check, ChevronLeft, ChevronRight, ImagePlus, RotateCcw } from "lucide-react";
+import { Camera, Check, ChevronLeft, ChevronRight, ImagePlus, RotateCcw, ShoppingBag } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotionConfig } from "motion/react";
 import { z } from "zod";
-import { PrimaryButton } from "@/components/ui/buttons";
+import { PrimaryButton, SecondaryButton } from "@/components/ui/buttons";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { Garment } from "@/components/wardrobe/garment";
 import { VoiceCore } from "@/components/voice/voice-core";
@@ -21,8 +21,9 @@ import { ClientImagePreparationError, preprocessWardrobeImage } from "@/lib/imag
 import { shouldRetryWardrobeProcessing, WardrobeProcessErrorResponseSchema, WardrobeProcessingError } from "@/lib/wardrobe/process-client";
 import { providerSessionHeaders } from "@/lib/api/client-session";
 import { createWardrobeLocalSaveDiagnostic, reportWardrobeLocalSaveFailure } from "@/lib/wardrobe/local-save-diagnostics";
+import { ShopifyPurchaseImport } from "@/components/wardrobe/shopify-purchase-import";
 
-type Step = "choose" | "processing" | "review" | "error";
+type Step = "choose" | "shopify" | "processing" | "review" | "error";
 type Sheet = "color" | "material" | "category" | null;
 
 const ProcessResponseSchema = z.object({
@@ -84,9 +85,13 @@ export default function AddWardrobePage() {
   const [analysisStatus, setAnalysisStatus] = useState<"complete" | "needs-review">("complete");
   const [error, setError] = useState<{ message: string; requestId: string | null; code: string | null; retryable: boolean }>({ message: "", requestId: null, code: null, retryable: false });
   const [saving, setSaving] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState({ index: 1, total: 1 });
+  const [canSkipFailedItem, setCanSkipFailedItem] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
   const savePromiseRef = useRef<Promise<void> | null>(null);
   const saveItemIdRef = useRef<string | null>(null);
+  const queueRef = useRef<File[]>([]);
+  const queueIndexRef = useRef(0);
   const reduceMotion = useReducedMotionConfig();
 
   useEffect(() => () => {
@@ -120,10 +125,20 @@ export default function AddWardrobePage() {
     }
   }
 
-  async function chooseFile(file?: File) {
-    if (!file) return;
+  async function processFile(file: File, index: number, total: number) {
+    controllerRef.current?.abort();
     saveItemIdRef.current = null;
+    setSaving(false);
+    setCanSkipFailedItem(false);
+    setProcessingProgress({ index: index + 1, total });
     setError({ message: "", requestId: null, code: null, retryable: false });
+    setAnalysis(null);
+    setSourceBlob(null);
+    setCutoutBlob(null);
+    setPreview((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
     setStep("processing");
     const jobId = crypto.randomUUID();
     await db.processingJobs.put({ id: jobId, status: "processing", createdAt: Date.now() });
@@ -147,8 +162,50 @@ export default function AddWardrobePage() {
           ? { message: processingError.message, requestId: null, code: processingError.code, retryable: false }
           : { message: processingError instanceof Error ? processingError.message : "We couldn’t process this item. Please try again.", requestId: null, code: "CLIENT_PROCESSING_FAILED", retryable: false });
       setStep("error");
+      setCanSkipFailedItem(queueRef.current.length > 1);
       await db.processingJobs.update(jobId, { status: "failed" });
     }
+  }
+
+  function beginFiles(files: File[]) {
+    const queue = files.slice(0, 8);
+    if (queue.length === 0) return;
+    queueRef.current = queue;
+    queueIndexRef.current = 0;
+    void processFile(queue[0], 0, queue.length);
+  }
+
+  async function finishCurrentItem() {
+    const nextIndex = queueIndexRef.current + 1;
+    if (nextIndex >= queueRef.current.length) {
+      router.push("/wardrobe");
+      return;
+    }
+    queueIndexRef.current = nextIndex;
+    const nextFile = queueRef.current[nextIndex];
+    if (nextFile) await processFile(nextFile, nextIndex, queueRef.current.length);
+  }
+
+  function retryCurrentItem() {
+    const file = queueRef.current[queueIndexRef.current];
+    if (!file) {
+      setStep("choose");
+      return;
+    }
+    void processFile(file, queueIndexRef.current, queueRef.current.length);
+  }
+
+  function skipCurrentItem() {
+    const nextIndex = queueIndexRef.current + 1;
+    const nextFile = queueRef.current[nextIndex];
+    if (!nextFile) {
+      queueRef.current = [];
+      queueIndexRef.current = 0;
+      router.push("/wardrobe");
+      return;
+    }
+    queueIndexRef.current = nextIndex;
+    void processFile(nextFile, nextIndex, queueRef.current.length);
   }
 
   function saveItem() {
@@ -219,7 +276,7 @@ export default function AddWardrobePage() {
       }
       completedStages.push(stage);
       recordLocalSave(requestId, stage, "success", { alreadySaved: result.alreadySaved, cleanupPending: result.cleanupPending, originalStored: result.originalStored });
-      router.push("/wardrobe");
+      await finishCurrentItem();
     } catch (saveError) {
       const id = saveItemIdRef.current;
       const [storedItem, storedImages, mode] = id
@@ -230,7 +287,7 @@ export default function AddWardrobePage() {
         && storedImages.thumbnailBlob instanceof Blob && storedImages.thumbnailBlob.size > 0;
       if (recovered) {
         recordLocalSave(requestId, "post-failure-check", "success", { recoveredCommittedRecord: true });
-        router.push("/wardrobe");
+        await finishCurrentItem();
         return;
       }
       const classified = classifyLocalSaveError(saveError, Boolean(storedItem) !== Boolean(storedImages));
@@ -282,7 +339,7 @@ export default function AddWardrobePage() {
 
   const sheetLabel = sheet === "color" ? "Select colors" : sheet === "material" ? "Select materials" : "Select category";
   const reviewReady = analysisStatus === "complete" || ["category", "colors", "materials"].every((field) => analysis?.userEditedFields.includes(field));
-  return <main className="phone-page"><div className="page-column"><header className="topbar"><Link href="/wardrobe" className="icon-button" aria-label="Back"><ChevronLeft /></Link><div className="topbar-title">{step === "review" ? "Review item" : "Add clothes"}</div><span /></header><AnimatePresence mode="popLayout" initial={false}><motion.div className="add-flow-motion" key={step} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(7px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(-4px)" }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{step === "choose" && <Choose onFile={(file) => void chooseFile(file)} />}{step === "processing" && <Processing />}{step === "error" && <ProcessingError error={error} onRetry={() => setStep("choose")} />}{step === "review" && reviewItem && analysis && <Review item={reviewItem} preview={preview} onSheet={setSheet} onSave={() => void saveItem()} saving={saving} needsReview={analysisStatus === "needs-review"} reviewReady={reviewReady} />}</motion.div></AnimatePresence><BottomSheet open={Boolean(sheet && analysis)} onClose={() => setSheet(null)} label={sheetLabel}>{analysis && <>{sheet === "color" && <ColorSheet value={analysis.primaryColor} onChange={(primaryColor) => updateAnalysis({ primaryColor })} onDone={() => setSheet(null)} />}{sheet === "material" && <MaterialSheet value={analysis.materials[0] ?? "Unknown"} onChange={(material) => updateAnalysis({ materials: [material] })} onDone={() => setSheet(null)} />}{sheet === "category" && <CategorySheet value={analysis.category} onChange={(category) => updateAnalysis({ category })} onDone={() => setSheet(null)} />}</>}</BottomSheet></div></main>;
+  return <main className="phone-page"><div className="page-column"><header className="topbar"><Link href="/wardrobe" className="icon-button" aria-label="Back"><ChevronLeft /></Link><div className="topbar-title">{step === "review" ? processingProgress.total === 1 ? "Review item" : `Review item ${processingProgress.index} of ${processingProgress.total}` : step === "shopify" ? "Shopify purchases" : "Add clothes"}</div><span /></header><AnimatePresence mode="popLayout" initial={false}><motion.div className="add-flow-motion" key={step} initial={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(7px)" }} animate={{ opacity: 1, transform: "translateY(0)" }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, transform: "translateY(-4px)" }} transition={reduceMotion ? { duration: 0.12 } : calmSpring}>{step === "choose" && <Choose onFile={(file) => file && beginFiles([file])} onShopify={() => setStep("shopify")} />}{step === "shopify" && <ShopifyPurchaseImport onCancel={() => setStep("choose")} onFiles={beginFiles} />}{step === "processing" && <Processing {...processingProgress} />}{step === "error" && <ProcessingError error={error} onRetry={retryCurrentItem} onSkip={canSkipFailedItem ? skipCurrentItem : undefined} />}{step === "review" && reviewItem && analysis && <Review item={reviewItem} preview={preview} onSheet={setSheet} onSave={() => void saveItem()} saving={saving} needsReview={analysisStatus === "needs-review"} reviewReady={reviewReady} />}</motion.div></AnimatePresence><BottomSheet open={Boolean(sheet && analysis)} onClose={() => setSheet(null)} label={sheetLabel}>{analysis && <>{sheet === "color" && <ColorSheet value={analysis.primaryColor} onChange={(primaryColor) => updateAnalysis({ primaryColor })} onDone={() => setSheet(null)} />}{sheet === "material" && <MaterialSheet value={analysis.materials[0] ?? "Unknown"} onChange={(material) => updateAnalysis({ materials: [material] })} onDone={() => setSheet(null)} />}{sheet === "category" && <CategorySheet value={analysis.category} onChange={(category) => updateAnalysis({ category })} onDone={() => setSheet(null)} />}</>}</BottomSheet></div></main>;
 }
 
 function classifyLocalSaveError(error: unknown, partialRecord: boolean) {
@@ -306,16 +363,16 @@ function recordLocalSave(requestId: string, stage: string, outcome: "started" | 
   else if (process.env.NODE_ENV !== "test") console.info(JSON.stringify(payload));
 }
 
-function Choose({ onFile }: { onFile: (file?: File) => void }) {
-  return <section className="add-flow"><div className="center-stage"><div><div className="capture-example"><div style={{ transform: "scale(2)" }}><Garment item={demoWardrobe[0]} /></div></div><h1 className="page-title" style={{ fontSize: 26 }}>One item at a time</h1><p className="secondary-copy">Place one item on a clear background.<br />Keep the full item inside the frame.</p></div></div><div style={{ display: "grid", gap: 10 }}><label className="primary-button" style={{ cursor: "pointer" }}><Camera size={18} />Take Photo<input hidden type="file" accept="image/*" capture="environment" onChange={(event) => onFile(event.target.files?.[0])} /></label><label className="secondary-button" style={{ cursor: "pointer" }}><ImagePlus size={18} />Choose from Library<input hidden type="file" accept="image/*" onChange={(event) => onFile(event.target.files?.[0])} /></label></div></section>;
+function Choose({ onFile, onShopify }: { onFile: (file?: File) => void; onShopify: () => void }) {
+  return <section className="add-flow"><div className="center-stage"><div><div className="capture-example"><div style={{ transform: "scale(2)" }}><Garment item={demoWardrobe[0]} /></div></div><h1 className="page-title" style={{ fontSize: 26 }}>One item at a time</h1><p className="secondary-copy">Place one item on a clear background.<br />Keep the full item inside the frame.</p></div></div><div style={{ display: "grid", gap: 10 }}><label className="primary-button" style={{ cursor: "pointer" }}><Camera size={18} />Take Photo<input hidden type="file" accept="image/*" capture="environment" onChange={(event) => onFile(event.target.files?.[0])} /></label><label className="secondary-button" style={{ cursor: "pointer" }}><ImagePlus size={18} />Choose from Library<input hidden type="file" accept="image/*" onChange={(event) => onFile(event.target.files?.[0])} /></label><SecondaryButton onClick={onShopify}><ShoppingBag size={18} />Import purchases from Shopify</SecondaryButton></div></section>;
 }
 
-function Processing() {
-  return <section className="add-flow"><div className="center-stage"><div className="processing-narrative"><p className="secondary-copy">Processing 1 of 1</p><div className="processing-focus"><VoiceCore state="thinking" label="YiYi is preparing this item" /><div><p className="body-copy">Preparing your item…</p><span>Removing the background and reading editable details</span></div></div><div className="processing-steps"><span className="active">Cutout</span><i /><span className="active">Details</span></div></div></div></section>;
+function Processing({ index, total }: { index: number; total: number }) {
+  return <section className="add-flow"><div className="center-stage"><div className="processing-narrative"><p className="secondary-copy">Processing {index} of {total}</p><div className="processing-focus"><VoiceCore state="thinking" label="YiYi is preparing this item" /><div><p className="body-copy">Preparing your item…</p><span>Removing the background and reading editable details</span></div></div><div className="processing-steps"><span className="active">Cutout</span><i /><span className="active">Details</span></div></div></div></section>;
 }
 
-function ProcessingError({ error, onRetry }: { error: { message: string; requestId: string | null; code: string | null; retryable: boolean }; onRetry: () => void }) {
-  return <section className="add-flow"><div className="center-stage"><div><VoiceCore state="error" label="Item processing failed" disabled /><h1 className="page-title" style={{ fontSize: 25 }}>Something went wrong</h1><p className="secondary-copy" style={{ maxWidth: 300 }}>{error.message}</p>{error.code && <p className="secondary-copy">Error: {error.code}{error.requestId ? ` · Diagnostic ID: ${error.requestId}` : ""}</p>}</div></div><PrimaryButton onClick={onRetry}><RotateCcw size={17} />{error.retryable ? "Try another photo" : "Choose another photo"}</PrimaryButton></section>;
+function ProcessingError({ error, onRetry, onSkip }: { error: { message: string; requestId: string | null; code: string | null; retryable: boolean }; onRetry: () => void; onSkip?: () => void }) {
+  return <section className="add-flow"><div className="center-stage"><div><VoiceCore state="error" label="Item processing failed" disabled /><h1 className="page-title" style={{ fontSize: 25 }}>Something went wrong</h1><p className="secondary-copy" style={{ maxWidth: 300 }}>{error.message}</p>{error.code && <p className="secondary-copy">Error: {error.code}{error.requestId ? ` · Diagnostic ID: ${error.requestId}` : ""}</p>}</div></div><div style={{ display: "grid", gap: 10 }}><PrimaryButton onClick={onRetry}><RotateCcw size={17} />Try this item again</PrimaryButton>{onSkip ? <SecondaryButton onClick={onSkip}>Skip this item</SecondaryButton> : null}</div></section>;
 }
 
 function Review({ item, preview, onSheet, onSave, saving, needsReview, reviewReady }: { item: WardrobeItem; preview: string | null; onSheet: (sheet: Sheet) => void; onSave: () => void; saving: boolean; needsReview: boolean; reviewReady: boolean }) {

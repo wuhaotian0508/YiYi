@@ -2,6 +2,7 @@ import { noStoreJson } from "@/lib/api/responses";
 import { productionProtectionReady, providerRoutesAllowed, rateLimitMode } from "@/lib/api/rate-limit";
 import { SCORING_VERSION } from "@/domain/recommendation/scoring";
 import { DEFAULT_REALTIME_MODEL, DEFAULT_REALTIME_TRANSCRIPTION_MODEL, DEFAULT_REALTIME_VOICE } from "@/lib/realtime/config";
+import { shopifyConfigured } from "@/lib/shopify/admin";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,7 @@ export function GET() {
     languageConfigured: Boolean(process.env.CRS_API_KEY ?? process.env.OPENAI_API_KEY),
     languageBaseConfigured: Boolean(process.env.OPENAI_LANGUAGE_BASE_URL ?? process.env.OPENAI_BASE_URL),
     photoroomConfigured: Boolean(process.env.PHOTOROOM_API_KEY),
+    shopifyConfigured: shopifyConfigured(),
     aiMode: process.env.AI_MODE === "live" ? "live" : "mock",
     voiceMode: process.env.NEXT_PUBLIC_VOICE_MODE === "browser" ? "browser" : process.env.NEXT_PUBLIC_VOICE_MODE === "live" ? "live" : "mock",
     itemModel: process.env.OPENAI_ITEM_MODEL ?? "gpt-5.6-terra",
