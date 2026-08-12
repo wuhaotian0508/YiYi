@@ -116,6 +116,37 @@ describe("paid provider fault boundaries", () => {
     expect(provider.parse).toHaveBeenCalledTimes(1);
   });
 
+  it("continues item analysis with a local normalized image when Photoroom rejects the request", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("AI_MODE", "live");
+    vi.stubEnv("PHOTOROOM_API_KEY", "test-key");
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 402 }));
+    const analysis = {
+      category: "top", subtype: "T-shirt", primaryColor: "blue", secondaryColors: [], materials: ["Cotton"],
+      pattern: "solid", fit: "regular", warmth: 2, formality: 1, comfort: 4, styleTags: ["casual"],
+      occasionTags: ["everyday"], weatherTags: ["mild"], metal: "unknown",
+      aiConfidence: { category: .95, colors: .9, materials: .7, pattern: .9, fit: .75, style: .8, formality: .8, warmth: .7, comfort: .7 },
+      featureProvenance: { category: "terra", colors: "terra", materials: "terra", pattern: "terra", fit: "terra", style: "terra", formality: "terra", warmth: "terra", comfort: "terra" },
+      internalDescription: "Blue cotton T-shirt", userEditedFields: [],
+    };
+    provider.parse.mockResolvedValue({ output_parsed: analysis, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+    const input = await sharp({ create: { width: 10, height: 12, channels: 3, background: { r: 30, g: 80, b: 180 } } }).jpeg().toBuffer();
+    const form = new FormData();
+    form.set("image", new File([webBytes(input)], "camera.jpg", { type: "image/jpeg" }));
+    const request = new Request("http://localhost/api/wardrobe/process", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=test", "x-forwarded-for": crypto.randomUUID() } });
+    vi.spyOn(request, "formData").mockResolvedValue(form);
+
+    const response = await processWardrobeItem(request);
+    const body = await response.json();
+
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(provider.parse).toHaveBeenCalledTimes(1);
+    expect(provider.parse.mock.calls[0]?.[0]).toMatchObject({ input: [{ content: [expect.anything(), { type: "input_image", image_url: expect.stringMatching(/^data:image\/webp;base64,/), detail: "high" }] }] });
+    expect(body).toMatchObject({ analysisStatus: "complete", source: { cutout: "local", analysis: "terra" }, analysis: { category: "top", primaryColor: "blue", materials: ["Cotton"] } });
+  });
+
   it("rejects malformed Photoroom output before Terra and makes no second paid call", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubEnv("AI_MODE", "live");

@@ -31,7 +31,7 @@ const ProcessResponseSchema = z.object({
   cutoutDataUrl: z.string().max(1_500_000).regex(/^data:image\/(?:webp|png);base64,[A-Za-z0-9+/]*={0,2}$/),
   analysis: WardrobeAnalysisSchema,
   analysisStatus: z.enum(["complete", "needs-review"]),
-  source: z.object({ cutout: z.enum(["mock", "photoroom"]), analysis: z.enum(["mock", "terra", "manual-review"]) }).strict(),
+  source: z.object({ cutout: z.enum(["mock", "photoroom", "local"]), analysis: z.enum(["mock", "terra", "manual-review"]) }).strict(),
   diagnostics: z.object({ photoroomMs: z.number().nullable(), analysisMs: z.number().nullable(), analysisErrorCode: z.string().nullable() }).strict(),
 }).strict();
 

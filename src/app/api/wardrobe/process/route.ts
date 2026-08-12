@@ -76,6 +76,16 @@ async function validateBackgroundRemovalOutput(input: Buffer, sharp: Awaited<Ret
     || width * height > MAX_BACKGROUND_REMOVAL_PIXELS) throw new Error("invalid provider image metadata");
 }
 
+async function normalizeImageWithoutBackgroundRemoval(input: Buffer, sharp: Awaited<ReturnType<typeof loadSharp>>) {
+  const normalized = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS, failOn: "warning" })
+    .rotate()
+    .resize(1024, 1024, { fit: "contain", background: { r: 255, g: 255, b: 255, alpha: 1 } })
+    .webp({ quality: 84 })
+    .toBuffer();
+  if (normalized.byteLength > MAX_NORMALIZED_OUTPUT_BYTES) throw new Error("normalized fallback output too large");
+  return normalized;
+}
+
 function mockAnalysis(): WardrobeAnalysis {
   return WardrobeAnalysisSchema.parse({
     category: "outerwear", subtype: "Soft jacket", primaryColor: "brown", secondaryColors: [], materials: ["Cotton blend"],
@@ -125,7 +135,7 @@ export async function POST(request: Request) {
       return noStoreJson({ requestId, cutoutDataUrl: `data:image/webp;base64,${normalized.toString("base64")}`, analysis: mockAnalysis(), analysisStatus: "complete", source: { cutout: "mock", analysis: "mock" }, diagnostics: { photoroomMs: null, analysisMs: null, analysisErrorCode: null } });
     }
 
-    if (!process.env.PHOTOROOM_API_KEY || !process.env.OPENAI_API_KEY) return apiError(requestId, 503, "NOT_CONFIGURED", "Image processing is not configured.", true);
+    if (!process.env.OPENAI_API_KEY) return apiError(requestId, 503, "NOT_CONFIGURED", "Image analysis is not configured.", true);
     const providerForm = new FormData();
     providerForm.append("image_file", new Blob([input], { type: detected.mime }), file.name);
     providerForm.append("format", "webp");
@@ -133,20 +143,23 @@ export async function POST(request: Request) {
     providerForm.append("size", "medium");
     providerForm.append("crop", "true");
     const photoroomStartedAt = Date.now();
-    let cutoutResponse: Response;
-    try {
-      cutoutResponse = await fetch("https://sdk.photoroom.com/v1/segment", { method: "POST", headers: { "x-api-key": process.env.PHOTOROOM_API_KEY }, body: providerForm, signal: AbortSignal.timeout(30_000) });
-    } catch (error) {
-      const metadata = safeErrorMetadata(error);
-      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", ...metadata, durationMs: Date.now() - photoroomStartedAt, errorCode: "BACKGROUND_REMOVAL_FAILED" });
-      return apiError(requestId, 502, "BACKGROUND_REMOVAL_FAILED", "We couldn’t process this item. Please try again.", true);
+    let cutoutResponse: Response | null = null;
+    if (process.env.PHOTOROOM_API_KEY) {
+      try {
+        cutoutResponse = await fetch("https://sdk.photoroom.com/v1/segment", { method: "POST", headers: { "x-api-key": process.env.PHOTOROOM_API_KEY }, body: providerForm, signal: AbortSignal.timeout(30_000) });
+      } catch (error) {
+        const metadata = safeErrorMetadata(error);
+        logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", ...metadata, durationMs: Date.now() - photoroomStartedAt, errorCode: "BACKGROUND_REMOVAL_FAILED" });
+      }
     }
-    if (!cutoutResponse.ok) {
+    if (cutoutResponse && !cutoutResponse.ok) {
       logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt, errorCode: "BACKGROUND_REMOVAL_FAILED", errorType: "ProviderHttpError" });
-      return apiError(requestId, 502, "BACKGROUND_REMOVAL_FAILED", "We couldn’t process this item. Please try again.", cutoutResponse.status >= 500);
+      cutoutResponse = null;
     }
     let normalized: Buffer;
+    let cutoutSource: "photoroom" | "local" = "photoroom";
     try {
+      if (!cutoutResponse) throw new Error("background removal unavailable");
       const providerContentType = cutoutResponse.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
       if (providerContentType !== "image/webp") throw new Error("unexpected provider content type");
       const removed = await readResponseBodyWithinLimit(cutoutResponse, MAX_BACKGROUND_REMOVAL_BYTES);
@@ -158,11 +171,15 @@ export async function POST(request: Request) {
       if (normalizedMetadata.format !== "webp" || normalizedMetadata.width !== 1024 || normalizedMetadata.height !== 1024 || (normalizedMetadata.pages ?? 1) !== 1) throw new Error("invalid normalized output");
     } catch (error) {
       const metadata = safeErrorMetadata(error);
-      logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", ...metadata, httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt, errorCode: "INVALID_BACKGROUND_REMOVAL_OUTPUT" });
-      return apiError(requestId, 502, "INVALID_BACKGROUND_REMOVAL_OUTPUT", "We couldn’t process this item. Please try again.", true);
+      if (cutoutResponse) {
+        logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "error", ...metadata, httpStatus: cutoutResponse.status, durationMs: Date.now() - photoroomStartedAt, errorCode: "INVALID_BACKGROUND_REMOVAL_OUTPUT" });
+        return apiError(requestId, 502, "INVALID_BACKGROUND_REMOVAL_OUTPUT", "We couldn’t process this item. Please try again.", true);
+      }
+      normalized = await normalizeImageWithoutBackgroundRemoval(input, sharp);
+      cutoutSource = "local";
     }
     const photoroomMs = Date.now() - photoroomStartedAt;
-    logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "success", httpStatus: cutoutResponse.status, durationMs: photoroomMs, providerStage: "background-removal" });
+    if (cutoutSource === "photoroom" && cutoutResponse) logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "photoroom", outcome: "success", httpStatus: cutoutResponse.status, durationMs: photoroomMs, providerStage: "background-removal" });
     const imageUrl = `data:image/webp;base64,${normalized.toString("base64")}`;
     const openai = new OpenAI(openAIClientOptions(process.env.OPENAI_API_KEY));
     const model = process.env.OPENAI_ITEM_MODEL ?? "gpt-5.6-terra";
@@ -181,17 +198,17 @@ export async function POST(request: Request) {
       logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", ...metadata, durationMs: Date.now() - openaiStartedAt, errorCode: "ITEM_ANALYSIS_FAILED", providerStage: "item-analysis" });
       return null;
     });
-    if (!result) return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis: manualReviewAnalysis(), analysisStatus: "needs-review", source: { cutout: "photoroom", analysis: "manual-review" }, diagnostics: { photoroomMs, analysisMs: Date.now() - openaiStartedAt, analysisErrorCode: "ITEM_ANALYSIS_FAILED" } });
+    if (!result) return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis: manualReviewAnalysis(), analysisStatus: "needs-review", source: { cutout: cutoutSource, analysis: "manual-review" }, diagnostics: { photoroomMs, analysisMs: Date.now() - openaiStartedAt, analysisErrorCode: "ITEM_ANALYSIS_FAILED" } });
     const parsedAnalysis = WardrobeAnalysisSchema.safeParse(result.output_parsed);
     if (!parsedAnalysis.success) {
       const analysisMs = Date.now() - openaiStartedAt;
       logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "error", httpStatus: 200, durationMs: analysisMs, errorCode: "INVALID_ITEM_ANALYSIS_OUTPUT", errorType: "InvalidProviderOutput", usage: responseUsage(result), providerStage: "item-analysis" });
-      return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis: manualReviewAnalysis(), analysisStatus: "needs-review", source: { cutout: "photoroom", analysis: "manual-review" }, diagnostics: { photoroomMs, analysisMs, analysisErrorCode: "INVALID_ITEM_ANALYSIS_OUTPUT" } });
+      return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis: manualReviewAnalysis(), analysisStatus: "needs-review", source: { cutout: cutoutSource, analysis: "manual-review" }, diagnostics: { photoroomMs, analysisMs, analysisErrorCode: "INVALID_ITEM_ANALYSIS_OUTPUT" } });
     }
     const analysis = parsedAnalysis.data;
     const analysisMs = Date.now() - openaiStartedAt;
     logApiDiagnostic({ requestId, route: "/api/wardrobe/process", provider: "openai-responses", model, outcome: "success", httpStatus: 200, durationMs: analysisMs, usage: responseUsage(result), providerStage: "item-analysis" });
-    return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis, analysisStatus: "complete", source: { cutout: "photoroom", analysis: "terra" }, diagnostics: { photoroomMs, analysisMs, analysisErrorCode: null } });
+    return noStoreJson({ requestId, cutoutDataUrl: imageUrl, analysis, analysisStatus: "complete", source: { cutout: cutoutSource, analysis: "terra" }, diagnostics: { photoroomMs, analysisMs, analysisErrorCode: null } });
   } catch (error) {
     const metadata = safeErrorMetadata(error);
     if (isImageRuntimeUnavailable(error)) {
