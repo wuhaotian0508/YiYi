@@ -522,6 +522,8 @@ button.attribute-row:active { background:#f7f7f8;transform:scale(.99); }
 .confirmed-mark > span:nth-child(2) { left: 3px; top: 25px; }
 .confirmed-mark > span:nth-child(3) { right: 5px; top: 10px; background: #a9bd9e; }
 .confirmed-state .confirmed-outfit { height: min(330px, 42dvh); }
+.confirmed-voice-transcript { position:absolute; z-index:3; left:50%; top:8px; width:min(88%,320px); max-height:3.2em; margin:0; padding:8px 12px; overflow:hidden; transform:translateX(-50%); border:1px solid rgb(225 225 229 / .88); border-radius:14px; background:rgb(255 255 255 / .9); box-shadow:0 6px 20px rgb(0 0 0 / .07); backdrop-filter:blur(14px) saturate(135%); color:#45474d!important; font-size:12px!important; line-height:1.35!important; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+.confirmed-voice-transcript span { margin-right:5px; color:#85858b; font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
 .confirmed-actions { width: 100%; margin-top: auto; display: grid; gap: 8px; }
 
 .wardrobe-header { margin-left: -8px; }
@@ -545,6 +547,9 @@ button.attribute-row:active { background:#f7f7f8;transform:scale(.99); }
 .cloud-sync-form label, .cloud-sync-account p { font-size: 12px; color: #5f5f65; }
 .cloud-sync-form input { min-height: 42px; border: 1px solid #dedee3; border-radius: 10px; padding: 0 12px; font: inherit; }
 .cloud-sync-account { display: grid; gap: 8px; margin-top: 12px; }
+.cloud-provider-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.cloud-sync-divider { display: flex; align-items: center; gap: 10px; margin: 4px 0; color: #929298; font-size: 11px; }
+.cloud-sync-divider::before, .cloud-sync-divider::after { content: ""; flex: 1; height: 1px; background: #e3e3e7; }
 .memory-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .processing-narrative { width: 100%; }
 .processing-narrative > p { text-align: center; margin: 0 0 34px; }
